@@ -36,8 +36,10 @@ public struct NewsFeed: Codable, Hashable, Sendable {
         NewsFeed(name: "Darknet Diaries", url: "https://podcast.darknetdiaries.com/"),
         NewsFeed(name: "USOM (TR-CERT) duyuru", url: "https://www.usom.gov.tr/rss/duyuru.rss"),
         NewsFeed(name: "USOM (TR-CERT) tehdit", url: "https://www.usom.gov.tr/rss/tehdit.rss"),
-        NewsFeed(name: "RansomLook", url: "https://www.ransomlook.io/rss.xml"),
     ]
+
+    /// Feeds dropped from the defaults; removed from saved settings too.
+    public static let retired: Set<String> = ["https://www.ransomlook.io/rss.xml"]
 }
 
 public enum News {

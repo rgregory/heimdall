@@ -47,7 +47,7 @@ public struct ScanOptions: Codable, Sendable, Equatable {
         updateChecks = try c.decodeIfPresent(Bool.self, forKey: .updateChecks) ?? d.updateChecks
         extensions = try c.decodeIfPresent(Bool.self, forKey: .extensions) ?? d.extensions
         news = try c.decodeIfPresent(Bool.self, forKey: .news) ?? d.news
-        newsFeeds = try c.decodeIfPresent([NewsFeed].self, forKey: .newsFeeds) ?? d.newsFeeds
+        newsFeeds = (try c.decodeIfPresent([NewsFeed].self, forKey: .newsFeeds) ?? d.newsFeeds).filter { !NewsFeed.retired.contains($0.url) }
     }
 }
 

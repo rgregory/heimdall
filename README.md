@@ -22,7 +22,7 @@ It runs entirely as **your user account**. You don't need root, an admin passwor
 | Go binaries | embedded build info | OSV.dev (Go, incl. `stdlib`) |
 | Browser extensions | Chromium and Firefox profiles | malicious-extension list |
 
-Every advisory is then checked for **exploitation** (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC), **public exploits** (Exploit-DB, Metasploit, nuclei), **likelihood** (FIRST EPSS) and missing scores (cvelistV5, CISA Vulnrichment). Sparkle feeds, the App Store and Homebrew's cask index flag **newer versions**, and 14 **news** feeds are matched to what's installed. The icon turns red while anything exploited is installed.
+Every advisory is then checked for **exploitation** (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC), **public exploits** (Exploit-DB, Metasploit, nuclei), **likelihood** (FIRST EPSS) and missing scores (cvelistV5, CISA Vulnrichment). Sparkle feeds, the App Store and Homebrew's cask index flag **newer versions**, and 13 **news** feeds are matched to what's installed. The icon turns red while anything exploited is installed.
 
 What's sent where, response limits, and per-app CPE mappings: [docs/OVERVIEW.md](docs/OVERVIEW.md).
 
@@ -45,7 +45,7 @@ The app is signed ad hoc, so the first launch needs a right-click → **Open**.
 - **⌘R** scans. The first scan without an NVD API key takes a few minutes, because NVD allows 5 requests per 30 s. Answers are cached for a day. A free key (Settings → Matching) is kept in your login keychain.
 - **Brief:** the exploited flaws to fix first, each with a copyable fix command, then this Mac's macOS and Safari status, counts by severity and by section, and what changed since the last scan.
 - **Exploited:** a timeline of CISA KEV listings, grouped by month, with same-day listings for one product folded into a single line. A red dot means a vulnerable version is installed now; a green ring means the product is installed but no vulnerable version was found. Switch between **This Mac** and **Everything**, and between 30 days, 90 days and 12 months.
-- **News:** the last 30 days from SANS ISC, The Hacker News, Krebs, Sophos, Securelist, WeLiveSecurity, Schneier, Troy Hunt, Graham Cluley, Darknet Diaries, USOM (TR-CERT) and RansomLook. Stories that name a CVE open here (red) or software installed here (pink) are highlighted; RansomLook and Darknet Diaries are shown but never matched. Findings that are in the news get an "in the news" tag, and the Brief lists this week's stories about your Mac. Feeds are editable in Settings → News.
+- **News:** the last 30 days from SANS ISC, The Hacker News, Krebs, Sophos, Securelist, WeLiveSecurity, Schneier, Troy Hunt, Graham Cluley, Darknet Diaries and USOM (TR-CERT). Stories that name a CVE open here (red) or software installed here (pink) are highlighted; Darknet Diaries episodes are shown but never matched. Findings that are in the news get an "in the news" tag, and the Brief lists this week's stories about your Mac. Feeds are editable in Settings → News.
 - **Section pages** (macOS, Apps, Homebrew, Languages): one row per vulnerable package. Click a row to open it into a card with its fix command and advisories. Click an advisory to see everything about it.
 - **Advisories:** every advisory in one sortable list. **Inventory:** everything examined. **Sources:** what was read and how fresh it is.
 - Results show up as soon as the fast checks finish. The slower NVD lookups for apps and macOS fill in as they arrive.
