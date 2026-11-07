@@ -326,3 +326,21 @@ final class NewsWordTests: XCTestCase {
         XCTAssertEqual(m.match(item("Chrome 143 fixes 20 bugs")).relevance, .installed)
     }
 }
+
+final class GoOwnerTests: XCTestCase {
+    func testGoBinaryFromHomebrew() {
+        var formula = Package(ecosystem: .homebrew, name: "gitleaks", version: "8.30.1", location: "/opt/homebrew/Cellar/gitleaks/8.30.1")
+        var mod = Package(ecosystem: .go, name: "golang.org/x/crypto", version: "0.35.0", location: "/opt/homebrew/Cellar/gitleaks/8.30.1/bin/gitleaks")
+        mod.parent = "gitleaks"
+        var pkgs = [formula, mod]
+        Scanner(options: ScanOptions()).annotateGoOwners(&pkgs)
+        XCTAssertEqual(pkgs[1].brewFormula, "gitleaks")
+        var v = Vulnerability(id: "GO-1"); v.fixed = ["0.45.0"]
+        XCTAssertTrue(Scanner.awaitingRelease(pkgs[1], [v]), "formula is current: nothing to upgrade yet")
+        XCTAssertTrue(Scanner.fixHint(pkgs[1], [v]).hasPrefix("No fixed build yet — Homebrew's gitleaks"))
+        formula.outdated = true
+        pkgs = [formula, mod]
+        Scanner(options: ScanOptions()).annotateGoOwners(&pkgs)
+        XCTAssertEqual(Scanner.fixHint(pkgs[1], [v]), "brew upgrade gitleaks")
+    }
+}

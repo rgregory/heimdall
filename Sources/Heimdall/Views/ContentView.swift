@@ -37,7 +37,7 @@ func pageSubtitle(_ page: Page) -> String {
     case .system: return "macOS and Safari against Apple's security releases, Apple's per-release notes and NVD."
     case .apps: return "Third-party apps (NVD, vendor advisories, KEV) and browser extensions (malicious-extension list)."
     case .homebrew: return "Formulae and casks, from brew vulns or OSV.dev by upstream release tag."
-    case .languages: return "Python, npm, cargo, Ruby gems and Go binaries, matched exactly by OSV.dev."
+    case .languages: return "Python, npm, cargo, Ruby gems and Go binaries (including Go tools from Homebrew), matched exactly by OSV.dev."
     case .ledger: return "Every advisory that applies, one line each."
     case .inventory: return "Everything examined, vulnerable or not."
     case .sources: return "What Heimdall read, what it asked, and what it sent."

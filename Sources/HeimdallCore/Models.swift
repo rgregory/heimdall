@@ -85,6 +85,9 @@ public struct Package: Codable, Hashable, Identifiable, Sendable {
     public var feedURL: String? = nil
     /// Which browser a browser extension belongs to.
     public var browser: String? = nil
+    /// Go binaries: the Homebrew formula or app bundle that installed the binary.
+    public var brewFormula: String? = nil
+    public var ownerApp: String? = nil
 
     public var id: String { "\(ecosystem.rawValue):\(parent.map { $0 + ">" } ?? "")\(name)@\(version)@\(location)" }
 

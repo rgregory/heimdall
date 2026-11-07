@@ -954,7 +954,10 @@ struct ParentGroupRow: View {
     var body: some View {
         let g = group
         let eco = g.findings.first?.package.ecosystem
-        let kind = eco == .go ? "Go binary" : eco == .pypi ? "Python app" : eco == .npm ? "npm package" : (eco?.title ?? "")
+        let first = g.findings.first?.package
+        let kind = first?.brewFormula != nil ? "Homebrew · Go" : first?.ownerApp.map { "inside \($0)" }
+            ?? (eco == .go ? "Go binary" : eco == .pypi ? "Python app" : eco == .npm ? "npm package" : (eco?.title ?? ""))
+        let waiting = g.findings.allSatisfy { $0.awaitingRelease == true }
         let modules = g.findings.filter { $0.package.name != "stdlib" }.count
         let hasStdlib = g.findings.contains { $0.package.name == "stdlib" }
         let detail = [modules > 0 ? plural(modules, eco == .go ? "module" : "dependency", eco == .go ? "modules" : "dependencies") : nil,
@@ -968,6 +971,8 @@ struct ParentGroupRow: View {
                 if g.kevCount > 0 { ThingsTag(text: "exploited", tint: .red, filled: true) }
                 if g.topSeverity != .unknown { ThingsTag(text: g.topSeverity.title.lowercased(), tint: g.topSeverity.tint) }
                 if g.vulns.contains(where: \.hasPublicExploit) { ThingsTag(text: "public exploit", tint: .purple) }
+                if waiting { ThingsTag(text: first?.brewFormula != nil ? "no fixed build yet" : "no fix released yet") }
+                else if first?.outdated == true, let f = first?.brewFormula { ThingsTag(text: "brew upgrade \(f)", tint: .blue) }
                 Text(g.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
             }
             .padding(.vertical, 6).padding(.horizontal, 10)

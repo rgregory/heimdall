@@ -96,6 +96,7 @@ public struct Scanner: Sendable {
             packages += e.packages; sources += e.status
         }
         annotateCasks(&packages)
+        annotateGoOwners(&packages)
         if let s = packages.first(where: { $0.bundleID == "com.apple.Safari" }) { posture.safariVersion = s.version }
 
         // ---- Feeds
@@ -392,6 +393,27 @@ public struct Scanner: Sendable {
         }
     }
 
+    /// Go binaries installed by Homebrew or inside an app: remember who owns them, so the fix
+    /// is "brew upgrade gitleaks" (or "no fixed build yet"), not "go install".
+    func annotateGoOwners(_ packages: inout [Package]) {
+        var formulae: [String: Package] = [:]
+        for p in packages where p.ecosystem == .homebrew { formulae[p.name] = p }
+        let apps = packages.filter { $0.ecosystem == .app && !$0.location.isEmpty }
+        for i in packages.indices where packages[i].ecosystem == .go {
+            let loc = packages[i].location
+            if let m = loc.firstMatch(#"/Cellar/([^/]+)/([^/]+)/"#), let f = formulae[m[1]] {
+                packages[i].brewFormula = f.name
+                packages[i].outdated = f.outdated
+                packages[i].source += " · Homebrew \(f.name) \(f.version)"
+            } else if let app = apps.first(where: { loc.hasPrefix($0.location + "/") }) {
+                packages[i].ownerApp = app.name
+                packages[i].cask = app.cask
+                packages[i].appStore = app.appStore
+                packages[i].source += " · inside \(app.name) \(app.version)"
+            }
+        }
+    }
+
     /// One row per CVE: GHSA, PYSEC and OSV ids for the same CVE are merged.
     static func dedupe(_ list: [Vulnerability]) -> [Vulnerability] {
         var groups: [String: Vulnerability] = [:]
@@ -425,6 +447,9 @@ public struct Scanner: Sendable {
     /// (for Homebrew, which knows) the installed version is already the newest. Typical for
     /// OSS-Fuzz reports fixed by a commit that hasn't shipped yet.
     public static func awaitingRelease(_ p: Package, _ vulns: [Vulnerability]) -> Bool {
+        // A Go binary from Homebrew: the module may be fixed upstream, but you only get it when
+        // Homebrew rebuilds the formula. Nothing to do while the formula is already current.
+        if p.ecosystem == .go, p.brewFormula != nil { return !p.outdated }
         let released = vulns.contains { v in v.fixed.contains { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 } }
         guard !released else { return false }
         switch p.ecosystem {
@@ -450,6 +475,9 @@ public struct Scanner: Sendable {
             guard names.allSatisfy(Self.isPackageName) else { return "Update this package using its package manager; its metadata contains an invalid package name." }
         }
         let to = target.map { " (fixed in \($0) or later)" } ?? ""
+        if p.ecosystem == .go, let f = p.brewFormula, awaitingRelease(p, vulns) {
+            return "No fixed build yet — Homebrew's \(f) is current but was built with \(p.name == "stdlib" ? "Go \(p.version)" : "\(p.name) \(p.version)")\(to). It's fixed when Homebrew rebuilds \(f); brew upgrade picks that up."
+        }
         if awaitingRelease(p, vulns) {
             let commit = vulns.flatMap(\.fixed).first { $0.hasPrefix("commit") }
             return "No fixed release yet — \(p.name) \(p.version) is the newest available. "
@@ -479,6 +507,11 @@ public struct Scanner: Sendable {
         case .browserExtension: return "Remove it: \(p.browser ?? "the browser") → Extensions → \(p.name) → Remove"
         case .go:
             let bin = p.parent ?? "the binary"
+            if let f = p.brewFormula { return "brew upgrade \(f)" }
+            if let app = p.ownerApp {
+                if let c = p.cask { return "brew upgrade --cask \(c)" }
+                return p.appStore ? "Update \(app) from the App Store" : "Update \(app) from its menu (Check for Updates…)"
+            }
             if p.name == "stdlib" { return "Rebuild or upgrade \(bin) with a newer Go toolchain\(to)" }
             return "Upgrade \(bin) (it embeds \(p.name)\(to))"
         }
