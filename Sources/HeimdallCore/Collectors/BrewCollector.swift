@@ -9,27 +9,34 @@ public struct CollectorOutput: Sendable {
 
 /// Homebrew formulae and casks, read with `brew info --json=v2 --installed` as the user.
 public enum BrewCollector {
-    public static func collect(useBrewVulns: Bool) async -> CollectorOutput {
+    public static func collect(useBrewVulns: Bool, offline: Bool = false) async -> CollectorOutput {
+        await collect(useBrewVulns: useBrewVulns, offline: offline, brew: Shell.which("brew")) { exe, args, timeout in
+            await Shell.run(exe, args, timeout: timeout)
+        }
+    }
+
+    static func collect(useBrewVulns: Bool, offline: Bool, brew: String?,
+                        run: (String, [String], TimeInterval) async -> ShellResult) async -> CollectorOutput {
         var out = CollectorOutput()
-        guard let brew = Shell.which("brew") else {
+        guard let brew else {
             out.status.append(SourceStatus(name: "Homebrew", state: .skipped, detail: "brew is not installed or not on PATH"))
             return out
         }
-        let r = await Shell.run(brew, ["info", "--json=v2", "--installed"], timeout: 180)
+        let r = await run(brew, ["info", "--json=v2", "--installed"], 180)
         guard r.ok, let j = jsonObject(Data(r.stdout.utf8)) as? [String: Any] else {
             out.status.append(SourceStatus(name: "Homebrew", state: .failed, detail: "brew info failed: \(r.stderr.trimmed.prefix(200))"))
             return out
         }
-        let prefix = (await Shell.run(brew, ["--prefix"], timeout: 20)).stdout.trimmed
+        let prefix = (await run(brew, ["--prefix"], 20)).stdout.trimmed
         out.packages = parse(j, prefix: prefix)
         let nf = out.packages.filter { $0.ecosystem == .homebrew }.count, nc = out.packages.count - nf
         out.status.append(SourceStatus(name: "Homebrew", state: .ok, detail: "\(nf) formulae, \(nc) casks via brew info (\(brew))", count: out.packages.count, updated: Date()))
 
-        if useBrewVulns {
-            let help = await Shell.run(brew, ["vulns", "--help"], timeout: 30)
+        if useBrewVulns && !offline {
+            let help = await run(brew, ["vulns", "--help"], 30)
             if help.ok {
                 // Exits non-zero when it finds something, so judge by the output, not the status.
-                let v = await Shell.run(brew, ["vulns", "--json"], timeout: 600)
+                let v = await run(brew, ["vulns", "--json"], 600)
                 let t = v.stdout.trimmed
                 if t.hasPrefix("{") || t.hasPrefix("[") {
                     out.brewVulns = Data(t.utf8)
@@ -40,6 +47,9 @@ public enum BrewCollector {
             } else {
                 out.status.append(SourceStatus(name: "brew vulns", state: .skipped, detail: "not available in this Homebrew; using OSV (GIT) lookups"))
             }
+        }
+        if useBrewVulns && offline {
+            out.status.append(SourceStatus(name: "brew vulns", state: .skipped, detail: "offline; using cached OSV answers only"))
         }
         return out
     }

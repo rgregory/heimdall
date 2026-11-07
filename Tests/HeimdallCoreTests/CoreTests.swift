@@ -243,7 +243,7 @@ final class FixHintTests: XCTestCase {
         XCTAssertTrue(Scanner.awaitingRelease(p, [v]))
         XCTAssertTrue(Scanner.fixHint(p, [v]).hasPrefix("No fixed release yet"))
         p.outdated = true   // Homebrew has something newer: upgrading is worth it
-        XCTAssertEqual(Scanner.fixHint(p, [v]), "brew upgrade libssh2")
+        XCTAssertEqual(Scanner.fixHint(p, [v]), "brew upgrade 'libssh2'")
         var py = Package(ecosystem: .pypi, name: "requests", version: "2.25.0")
         var w = Vulnerability(id: "GHSA-x"); w.fixed = ["2.31.0"]
         XCTAssertFalse(Scanner.awaitingRelease(py, [w]))

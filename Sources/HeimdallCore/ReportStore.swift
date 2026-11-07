@@ -39,7 +39,15 @@ public enum ReportExport {
     public static func json(_ r: ScanReport) -> Data { (try? JSONCoding.pretty.encode(r)) ?? Data() }
 
     public static func csv(_ r: ScanReport) -> String {
-        func q(_ s: String) -> String { s.contains(where: { ",\"\n".contains($0) }) ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s }
+        func q(_ raw: String) -> String {
+            // CSV quoting alone does not stop spreadsheet formula interpretation.
+            let leading = raw.drop(while: { $0.isWhitespace })
+            let unsafe = leading.first.map { "=+-@".contains($0) } == true
+                || raw.unicodeScalars.first.map { CharacterSet(charactersIn: "\t\r\n").contains($0) } == true
+            let s = unsafe ? "'" + raw : raw
+            return s.unicodeScalars.contains(where: { CharacterSet(charactersIn: ",\"\r\n").contains($0) })
+                ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
+        }
         var lines = ["ecosystem,package,version,parent,location,vulnerability,aliases,severity,cvss,epss,kev,kev_added,ransomware,fixed,confidence,source,fix,summary"]
         for (f, v) in r.allVulns.sorted(by: { (a: (Finding, Vulnerability), b: (Finding, Vulnerability)) in a.1.priority > b.1.priority }) {
             let p = f.package

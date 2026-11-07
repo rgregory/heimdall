@@ -39,7 +39,11 @@ Matches come from published affected-version ranges, except where noted *inferre
 - **FIRST EPSS:** CVE ids.
 - **CISA KEV catalog and Apple's security-release index:** plain downloads.
 
-No paths, file contents or host names are sent. Offline mode (in Settings) uses cached data only.
+No paths, file contents or host names are sent. Offline mode (in Settings) uses cached data only and skips `brew vulns`.
+
+External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; OSV and NVD reject malformed or incomplete responses instead of caching them as clean results. A failed refresh preserves the previous cache and reports degraded coverage.
+
+Copyable fix commands validate package names and fixed versions and quote their arguments. CSV exports neutralize spreadsheet formula prefixes in external text.
 
 ## Build
 

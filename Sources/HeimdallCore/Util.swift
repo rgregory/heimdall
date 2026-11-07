@@ -94,6 +94,11 @@ public struct ShellResult: Sendable {
 final class Buffer: @unchecked Sendable { var data = Data() }
 
 public enum Shell {
+    /// One literal POSIX-shell argument, including embedded apostrophes.
+    static func quote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
     /// The user's login-shell PATH plus the usual tool locations. GUI apps start with a bare
     /// PATH, so brew, pip and friends would otherwise be invisible.
     public static let path: String = {
@@ -160,36 +165,85 @@ public struct HTTPError: Error, CustomStringConvertible {
     public var description: String { "HTTP \(status) from \(URL(string: url)?.host ?? url)" }
 }
 
-public enum HTTP {
-    static let session: URLSession = {
-        let c = URLSessionConfiguration.ephemeral
-        c.timeoutIntervalForRequest = 60
-        c.timeoutIntervalForResource = 300
-        c.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
-        return URLSession(configuration: c)
-    }()
+enum FeedError: Error, CustomStringConvertible {
+    case invalid(String)
+    var description: String { switch self { case .invalid(let detail): return "Invalid feed response: " + detail } }
+}
 
-    public static func get(_ url: String, headers: [String: String] = [:]) async throws -> Data {
-        try await send(url, method: "GET", body: nil, headers: headers)
+enum DownloadError: Error, Equatable {
+    case tooLarge(Int)
+}
+
+public enum HTTP {
+    // Large indexes opt into a larger finite allowance; ordinary JSON responses stay bounded.
+    public static let defaultMaxBytes = 32 * 1024 * 1024
+
+    public static func get(_ url: String, headers: [String: String] = [:], maxBytes: Int = defaultMaxBytes) async throws -> Data {
+        try await send(url, method: "GET", body: nil, headers: headers, maxBytes: maxBytes)
     }
     public static func postJSON(_ url: String, _ body: Data) async throws -> Data {
         try await send(url, method: "POST", body: body, headers: ["Content-Type": "application/json"])
     }
 
-    static func send(_ url: String, method: String, body: Data?, headers: [String: String]) async throws -> Data {
-        guard let u = URL(string: url) else { throw HTTPError(status: 0, url: url) }
+    static func send(_ url: String, method: String, body: Data?, headers: [String: String],
+                     maxBytes: Int = defaultMaxBytes, configuration: URLSessionConfiguration? = nil) async throws -> Data {
+        guard let u = URL(string: url), ["https", "http"].contains(u.scheme?.lowercased() ?? ""), maxBytes > 0 else {
+            throw HTTPError(status: 0, url: url)
+        }
         var req = URLRequest(url: u)
         req.httpMethod = method
         req.httpBody = body
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        let (data, resp): (Data, URLResponse?) = try await withCheckedThrowingContinuation { c in
-            session.dataTask(with: req) { d, r, e in
-                if let e { c.resume(throwing: e) } else { c.resume(returning: (d ?? Data(), r)) }
-            }.resume()
+        let c = configuration ?? URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 60
+        c.timeoutIntervalForResource = 300
+        c.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
+        let receiver = BoundedDownload(maxBytes: maxBytes)
+        let session = URLSession(configuration: c, delegate: receiver, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver.continuation = continuation
+            session.dataTask(with: req).resume()
         }
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else { throw HTTPError(status: status, url: url) }
-        return data
+    }
+}
+
+/// URLSession delivers these callbacks serially. Check both the advertised size and the
+/// actual decoded bytes, so chunked, compressed, or misleading responses cannot bypass it.
+private final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let maxBytes: Int
+    var data = Data()
+    var failure: Error?
+    var continuation: CheckedContinuation<Data, Error>?
+
+    init(maxBytes: Int) { self.maxBytes = maxBytes }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if !(200..<300).contains(status) {
+            failure = HTTPError(status: status, url: response.url?.absoluteString ?? "")
+        } else if response.expectedContentLength > Int64(maxBytes) {
+            failure = DownloadError.tooLarge(maxBytes)
+        }
+        completionHandler(failure == nil ? .allow : .cancel)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard failure == nil else { return }
+        guard chunk.count <= maxBytes - data.count else {
+            failure = DownloadError.tooLarge(maxBytes)
+            data.removeAll()
+            dataTask.cancel()
+            return
+        }
+        data.append(chunk)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = failure ?? error { continuation?.resume(throwing: error) }
+        else { continuation?.resume(returning: data) }
+        continuation = nil
     }
 }
 
@@ -199,6 +253,8 @@ public enum HTTP {
 public struct DiskCache: Sendable {
     public let dir: URL
     public init(_ name: String) { dir = Paths.ensure(Paths.cache.appendingPathComponent(name, isDirectory: true)) }
+
+    init(directory: URL) { dir = Paths.ensure(directory) }
 
     func url(_ key: String) -> URL {
         let safe = key.map { $0.isLetter || $0.isNumber || "-_.".contains($0) ? $0 : "_" }

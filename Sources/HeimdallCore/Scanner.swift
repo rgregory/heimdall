@@ -79,7 +79,7 @@ public struct Scanner: Sendable {
         var brewVulns: Data?
         if options.homebrew {
             progress("Asking Homebrew what is installed", 0.06)
-            let b = await BrewCollector.collect(useBrewVulns: options.useBrewVulns)
+            let b = await BrewCollector.collect(useBrewVulns: options.useBrewVulns, offline: options.offline)
             packages += b.packages; sources += b.status; brewVulns = b.brewVulns
         }
         progress("Reading Python, npm, cargo, gem and Go metadata", 0.12)
@@ -401,11 +401,19 @@ public struct Scanner: Sendable {
         return order.compactMap { groups[$0] }
     }
 
+    static func isFixVersion(_ value: String) -> Bool {
+        value.range(of: #"\A[0-9][0-9A-Za-z.!+_~:-]*\z"#, options: .regularExpression) != nil
+    }
+
+    static func isPackageName(_ value: String) -> Bool {
+        value.range(of: #"\A(?:[A-Za-z0-9][A-Za-z0-9._+-]*(?:/[A-Za-z0-9][A-Za-z0-9._+-]*)*|@[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)\z"#, options: .regularExpression) != nil
+    }
+
     /// Nothing to upgrade to: no advisory names a released version above what's installed, and
     /// (for Homebrew, which knows) the installed version is already the newest. Typical for
     /// OSS-Fuzz reports fixed by a commit that hasn't shipped yet.
     public static func awaitingRelease(_ p: Package, _ vulns: [Vulnerability]) -> Bool {
-        let released = vulns.contains { v in v.fixed.contains { !$0.hasPrefix("commit") && Version.compare($0, p.version) > 0 } }
+        let released = vulns.contains { v in v.fixed.contains { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 } }
         guard !released else { return false }
         switch p.ecosystem {
         case .homebrew, .cask: return !p.outdated
@@ -420,9 +428,15 @@ public struct Scanner: Sendable {
     public static func fixHint(_ p: Package, _ vulns: [Vulnerability]) -> String {
         // Per advisory, the first fixed release above what's installed; then the highest of those.
         let firsts = vulns.compactMap { v in
-            v.fixed.filter { !$0.hasPrefix("commit") && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) })
+            v.fixed.filter { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) })
         }
         let target = firsts.max(by: { Version.less($0, $1) })
+        // Names are metadata too. Reject option-like names and non-package syntax before
+        // offering a command, then quote every argument independently of validation.
+        let names = p.ecosystem == .app ? [p.cask].compactMap { $0 } : [p.name, p.parent, p.cask].compactMap { $0 }
+        if [.homebrew, .cask, .pypi, .npm, .crates, .rubygems].contains(p.ecosystem) || p.cask != nil {
+            guard names.allSatisfy(Self.isPackageName) else { return "Update this package using its package manager; its metadata contains an invalid package name." }
+        }
         let to = target.map { " (fixed in \($0) or later)" } ?? ""
         if awaitingRelease(p, vulns) {
             let commit = vulns.flatMap(\.fixed).first { $0.hasPrefix("commit") }
@@ -431,25 +445,25 @@ public struct Scanner: Sendable {
         }
         switch p.ecosystem {
         case .macos: return "System Settings → General → Software Update"
-        case .homebrew: return "brew upgrade \(p.name)"
-        case .cask: return "brew upgrade --cask \(p.name)"
+        case .homebrew: return "brew upgrade \(Shell.quote(p.name))"
+        case .cask: return "brew upgrade --cask \(Shell.quote(p.name))"
         case .app:
-            if let c = p.cask { return "brew upgrade --cask \(c)" }
+            if let c = p.cask { return "brew upgrade --cask \(Shell.quote(c))" }
             if p.appStore { return "Update \(p.name) from the App Store" }
             if MSRC.isMicrosoft(p) && p.bundleID != "com.microsoft.VSCode" { return "Help → Check for Updates (Microsoft AutoUpdate)\(target.map { " — needs build \($0)" } ?? "")" }
             return "Update \(p.name) from its menu (Check for Updates…)"
         case .pypi:
             if let parent = p.parent {
-                if p.source.hasPrefix("pipx") { return "pipx upgrade \(parent)  — or: pipx runpip \(parent) install -U \(p.name)" }
-                if p.source.hasPrefix("uv tool") { return "uv tool upgrade \(parent)" }
-                if p.source.contains("Homebrew formula") { return "brew upgrade \(parent)" }
+                if p.source.hasPrefix("pipx") { return "pipx upgrade \(Shell.quote(parent))  — or: pipx runpip \(Shell.quote(parent)) install -U \(Shell.quote(p.name))" }
+                if p.source.hasPrefix("uv tool") { return "uv tool upgrade \(Shell.quote(parent))" }
+                if p.source.contains("Homebrew formula") { return "brew upgrade \(Shell.quote(parent))" }
             }
-            return "python3 -m pip install -U '\(p.name)\(target.map { ">=\($0)" } ?? "")'  — in \(p.location)"
+            return "python3 -m pip install -U \(Shell.quote(p.name + (target.map { ">=\($0)" } ?? "")))  — in \(p.location)"
         case .npm:
-            if let parent = p.parent { return "npm update -g \(parent)  — \(p.name) is a dependency\(to)" }
-            return "npm install -g \(p.name)@latest"
-        case .crates: return "cargo install \(p.name) --locked --force"
-        case .rubygems: return "gem update \(p.name)"
+            if let parent = p.parent { return "npm update -g \(Shell.quote(parent))  — \(p.name) is a dependency\(to)" }
+            return "npm install -g \(Shell.quote(p.name + "@latest"))"
+        case .crates: return "cargo install \(Shell.quote(p.name)) --locked --force"
+        case .rubygems: return "gem update \(Shell.quote(p.name))"
         case .browserExtension: return "Remove it: \(p.browser ?? "the browser") → Extensions → \(p.name) → Remove"
         case .go:
             let bin = p.parent ?? "the binary"

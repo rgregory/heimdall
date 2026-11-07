@@ -9,6 +9,13 @@ public enum OSVClient {
     struct Query: Hashable { var pkgIndex: Int; var ecosystem: String; var name: String; var version: String }
 
     public static func match(_ packages: [Package], offline: Bool) async -> ([String: [Vulnerability]], SourceStatus) {
+        await match(packages, offline: offline, cache: DiskCache("osv"), post: { try await HTTP.postJSON(batchURL, $0) },
+                    get: { try await HTTP.get($0) })
+    }
+
+    static func match(_ packages: [Package], offline: Bool, cache: DiskCache,
+                      post: (Data) async throws -> Data,
+                      get: @escaping @Sendable (String) async throws -> Data) async -> ([String: [Vulnerability]], SourceStatus) {
         var queries: [Query] = []
         for (i, p) in packages.enumerated() {
             if let eco = p.ecosystem.osvName {
@@ -21,11 +28,11 @@ public enum OSVClient {
         }
         guard !queries.isEmpty else { return ([:], SourceStatus(name: "OSV.dev", state: .skipped, detail: "no packages to check")) }
 
-        let cache = DiskCache("osv")
         // A batch answer is reused for 6 hours as long as the package set is the same.
         let fingerprint = stableHash(queries.map { "\($0.ecosystem)|\($0.name)|\($0.version)" }.joined(separator: ","))
         var ids: [[String]] = Array(repeating: [], count: queries.count)
         var batchNote = ""
+        var warning = false
         if let cached = cache.get("batch-\(fingerprint).json", [[String]].self, maxAge: offline ? nil : 6 * 3600), cached.count == queries.count {
             ids = cached; batchNote = "cached"
         } else if offline {
@@ -34,21 +41,18 @@ public enum OSVClient {
             do {
                 for start in stride(from: 0, to: queries.count, by: 1000) {
                     let chunk = Array(queries[start..<min(start + 1000, queries.count)])
-                    let body: [String: Any] = ["queries": chunk.map { q in
-                        q.ecosystem == "GIT"
-                            ? ["package": ["name": q.name, "ecosystem": "GIT"], "version": q.version] as [String: Any]
-                            : ["package": ["name": q.name, "ecosystem": q.ecosystem], "version": q.version] as [String: Any]
-                    }]
-                    let d = try await HTTP.postJSON(batchURL, try JSONSerialization.data(withJSONObject: body))
-                    let results = (jsonObject(d) as? [String: Any])?["results"] as? [[String: Any]] ?? []
-                    for (j, r) in results.enumerated() where start + j < ids.count {
-                        ids[start + j] = (r["vulns"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
-                    }
+                    let results = try await queryIDs(chunk, post: post)
+                    for (j, result) in results.enumerated() { ids[start + j] = result }
                 }
                 cache.put("batch-\(fingerprint).json", ids)
                 batchNote = "queried"
             } catch {
-                return ([:], SourceStatus(name: "OSV.dev", state: .failed, detail: "querybatch failed: \(error)"))
+                guard let previous = cache.get("batch-\(fingerprint).json", [[String]].self), previous.count == queries.count else {
+                    return ([:], SourceStatus(name: "OSV.dev", state: .failed, detail: "querybatch failed: \(error)"))
+                }
+                ids = previous
+                warning = true
+                batchNote = "refresh failed; using cached answer: \(error)"
             }
         }
 
@@ -57,9 +61,10 @@ public enum OSVClient {
         let details: [(String, [String: Any]?)] = await concurrentMap(allIDs, width: 8) { id in
             if let d = cache.data("vuln-\(id).json", maxAge: offline ? nil : 7 * 86400), let j = jsonObject(d) as? [String: Any] { return (id, j) }
             if offline { return (id, nil) }
-            guard let d = try? await HTTP.get(vulnURL + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)) else { return (id, nil) }
+            guard let d = try? await get(vulnURL + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)),
+                  let j = jsonObject(d) as? [String: Any], j["id"] as? String == id else { return (id, nil) }
             cache.store("vuln-\(id).json", d)
-            return (id, jsonObject(d) as? [String: Any])
+            return (id, j)
         }
         let byID = Dictionary(details.map { ($0.0, $0.1) }, uniquingKeysWith: { a, _ in a })
 
@@ -76,8 +81,53 @@ public enum OSVClient {
         }
         // GIT queries can return the same advisory twice (tag and v-tag).
         for (k, v) in out { var seen = Set<String>(); out[k] = v.filter { seen.insert($0.id).inserted } }
+        warning = warning || details.contains { $0.1 == nil }
         let hits = out.values.reduce(0) { $0 + $1.count }
-        return (out, SourceStatus(name: "OSV.dev", state: .ok, detail: "\(queries.count) lookups (\(batchNote)), \(allIDs.count) advisories", count: hits, updated: Date()))
+        return (out, SourceStatus(name: "OSV.dev", state: warning ? .warning : .ok, detail: "\(queries.count) lookups (\(batchNote)), \(allIDs.count) advisories\(details.contains { $0.1 == nil } ? "; some advisory details unavailable" : "")", count: hits, updated: Date()))
+    }
+
+    private struct Batch: Decodable { var results: [Result] }
+    private struct Result: Decodable {
+        struct ID: Decodable { var id: String }
+        var vulns: [ID]?
+        var next_page_token: String?
+    }
+
+    /// Keep each token paired with its original query; finished queries are not sent again.
+    static func queryIDs(_ queries: [Query], post: (Data) async throws -> Data) async throws -> [[String]] {
+        var ids = [[String]](repeating: [], count: queries.count)
+        var pending = Array(queries.indices)
+        var tokens: [Int: String] = [:]
+        var seen = [Set<String>](repeating: [], count: queries.count)
+        var pages = 0
+        while !pending.isEmpty {
+            try Task.checkCancellation()
+            pages += 1
+            guard pages <= 100 else { throw FeedError.invalid("OSV pagination limit exceeded") }
+            let body: [String: Any] = ["queries": pending.map { i -> [String: Any] in
+                let q = queries[i]
+                var item: [String: Any] = ["package": ["name": q.name, "ecosystem": q.ecosystem], "version": q.version]
+                if let token = tokens[i] { item["page_token"] = token }
+                return item
+            }]
+            let data = try await post(JSONSerialization.data(withJSONObject: body))
+            let response = try JSONDecoder().decode(Batch.self, from: data)
+            guard response.results.count == pending.count else { throw FeedError.invalid("OSV result count does not match query count") }
+            var next: [Int] = []
+            for (i, result) in zip(pending, response.results) {
+                for v in result.vulns ?? [] {
+                    guard !v.id.isEmpty else { throw FeedError.invalid("OSV advisory has no ID") }
+                    ids[i].append(v.id)
+                }
+                if let token = result.next_page_token, !token.isEmpty {
+                    guard seen[i].insert(token).inserted else { throw FeedError.invalid("OSV repeated a page token") }
+                    tokens[i] = token
+                    next.append(i)
+                }
+            }
+            pending = next
+        }
+        return ids.map { $0.uniqued() }
     }
 
     static func vulnerability(_ j: [String: Any], ecosystem: String, package: String) -> Vulnerability {

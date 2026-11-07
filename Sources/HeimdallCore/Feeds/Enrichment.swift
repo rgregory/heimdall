@@ -95,8 +95,8 @@ public enum ExploitIndex {
             notes.append("\(source) \(n > 0 ? "✓" : "✕")")
         }
         if !offline {
-            if let d = try? await HTTP.get("https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv") { add(String(decoding: d, as: UTF8.self), "Exploit-DB") } else { notes.append("Exploit-DB ✕") }
-            if let d = try? await HTTP.get("https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json") { add(String(decoding: d, as: UTF8.self), "Metasploit") } else { notes.append("Metasploit ✕") }
+            if let d = try? await HTTP.get("https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv", maxBytes: 64 * 1024 * 1024) { add(String(decoding: d, as: UTF8.self), "Exploit-DB") } else { notes.append("Exploit-DB ✕") }
+            if let d = try? await HTTP.get("https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json", maxBytes: 128 * 1024 * 1024) { add(String(decoding: d, as: UTF8.self), "Metasploit") } else { notes.append("Metasploit ✕") }
         }
         // nuclei: your local checkout first (file names are CVE ids), else the upstream index.
         let local = nucleiLocal()

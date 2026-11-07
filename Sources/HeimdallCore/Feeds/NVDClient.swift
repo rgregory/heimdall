@@ -29,13 +29,23 @@ public actor NVDClient {
     let apiKey: String?
     let offline: Bool
     var last = Date.distantPast
-    let cache = DiskCache("nvd")
+    let cache: DiskCache
+    let request: @Sendable (String, [String: String]) async throws -> Data
     public private(set) var requests = 0
     public private(set) var errors: [String] = []
 
     public init(apiKey: String?, offline: Bool) {
         self.apiKey = (apiKey?.trimmed.isEmpty ?? true) ? nil : apiKey?.trimmed
         self.offline = offline
+        self.cache = DiskCache("nvd")
+        self.request = { try await HTTP.get($0, headers: $1) }
+    }
+
+    init(offline: Bool, cache: DiskCache, request: @escaping @Sendable (String, [String: String]) async throws -> Data) {
+        self.apiKey = nil
+        self.offline = offline
+        self.cache = cache
+        self.request = request
     }
 
     var spacing: TimeInterval { apiKey == nil ? 6.2 : 0.7 }
@@ -47,7 +57,7 @@ public actor NVDClient {
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) }
             last = Date(); requests += 1
             do {
-                return try await HTTP.get(url, headers: apiKey.map { ["apiKey": $0] } ?? [:])
+                return try await request(url, apiKey.map { ["apiKey": $0] } ?? [:])
             } catch let e as HTTPError where (e.status == 403 || e.status == 429 || e.status == 503) && attempt < 2 {
                 attempt += 1
                 try? await Task.sleep(nanoseconds: 30_000_000_000)   // rate-limited: back off a full window
@@ -70,12 +80,11 @@ public actor NVDClient {
                 let url = "https://services.nvd.nist.gov/rest/json/cves/2.0?noRejected\(ver == nil ? "&hasKev" : "")&resultsPerPage=2000&startIndex=\(start)&virtualMatchString="
                     + (match.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? match)
                 let d = try await fetch(url)
-                guard let j = jsonObject(d) as? [String: Any] else { break }
-                let total = j["totalResults"] as? Int ?? 0
-                let rows = j["vulnerabilities"] as? [[String: Any]] ?? []
-                all += rows.compactMap { ($0["cve"] as? [String: Any]).map(NVDClient.reduce) }
-                start += rows.count
-                if rows.isEmpty || start >= total { break }
+                let page = try Self.page(d, expectedStart: start)
+                all += page.cves
+                start += page.cves.count
+                if start == page.total { break }
+                guard start < 100_000 else { throw FeedError.invalid("NVD pagination limit exceeded") }
             } while true
         } catch {
             errors.append("\(vendor):\(product) — \(error)")
@@ -90,11 +99,39 @@ public actor NVDClient {
         let key = "cve-\(id).json"
         if let c = cache.get(key, NVDCve.self, maxAge: offline ? nil : 7 * 86400) { return c }
         if offline { return nil }
-        guard let d = try? await fetch("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=\(id)"),
-              let j = jsonObject(d) as? [String: Any],
-              let c = ((j["vulnerabilities"] as? [[String: Any]])?.first?["cve"] as? [String: Any]).map(NVDClient.reduce) else { return nil }
-        cache.put(key, c)
-        return c
+        do {
+            let d = try await fetch("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=\(id)")
+            let page = try Self.page(d, expectedStart: 0)
+            guard page.total == 1, let c = page.cves.first, c.id == id else { return nil }
+            cache.put(key, c)
+            return c
+        } catch {
+            errors.append("\(id) — \(error)")
+            return cache.get(key, NVDCve.self)
+        }
+    }
+
+    private struct Envelope: Decodable {
+        struct Row: Decodable { struct CVE: Decodable { var id: String }; var cve: CVE }
+        var startIndex: Int
+        var totalResults: Int
+        var resultsPerPage: Int
+        var vulnerabilities: [Row]
+    }
+
+    static func page(_ data: Data, expectedStart: Int) throws -> (cves: [NVDCve], total: Int) {
+        let e = try JSONDecoder().decode(Envelope.self, from: data)
+        guard e.startIndex == expectedStart, e.totalResults >= expectedStart,
+              e.resultsPerPage >= 0, e.vulnerabilities.count == e.resultsPerPage,
+              e.vulnerabilities.count <= e.totalResults - expectedStart,
+              !e.vulnerabilities.isEmpty || expectedStart == e.totalResults,
+              e.vulnerabilities.allSatisfy({ !$0.cve.id.isEmpty }),
+              let j = jsonObject(data) as? [String: Any], let rows = j["vulnerabilities"] as? [[String: Any]] else {
+            throw FeedError.invalid("NVD pagination or CVE records are inconsistent")
+        }
+        let records = rows.compactMap { $0["cve"] as? [String: Any] }
+        guard records.count == rows.count else { throw FeedError.invalid("NVD CVE record is not an object") }
+        return (records.map(reduce), e.totalResults)
     }
 
     /// CPE-safe version: first run of version characters ("6.2.5 (43380)" → "6.2.5").

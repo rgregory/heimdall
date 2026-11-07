@@ -13,7 +13,7 @@ public enum UpdateChecks {
         let sparkle: [(Int, String?)] = await concurrentMap(Array(feeds), width: 8) { item in
             let key = "sparkle-" + stableHash(item.1) + ".xml"
             var d = cache.data(key, maxAge: offline ? nil : 86400)
-            if d == nil && !offline { d = try? await HTTP.get(item.1); if let d { cache.store(key, d) } }
+            if d == nil && !offline { d = try? await HTTP.get(item.1, maxBytes: 2 * 1024 * 1024); if let d { cache.store(key, d) } }
             return (item.0, d.flatMap { latestInAppcast(String(decoding: $0, as: UTF8.self)) })
         }
         for (i, v) in sparkle { if let v, set(&packages[i], v, "Sparkle feed") { bySparkle += 1 } }
@@ -75,7 +75,7 @@ public enum UpdateChecks {
     static func loadCaskIndex(offline: Bool) async -> [String: String] {
         let cache = DiskCache("updates")
         if let c = cache.get("cask-index.json", [String: String].self, maxAge: offline ? nil : 86400) { return c }
-        guard !offline, let d = try? await HTTP.get("https://formulae.brew.sh/api/cask.json"),
+        guard !offline, let d = try? await HTTP.get("https://formulae.brew.sh/api/cask.json", maxBytes: 64 * 1024 * 1024),
               let arr = jsonObject(d) as? [[String: Any]] else { return cache.get("cask-index.json", [String: String].self) ?? [:] }
         var map: [String: String] = [:]
         for c in arr {
