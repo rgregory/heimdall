@@ -4,6 +4,11 @@ Heimdall is a native macOS app that inventories the software on your Mac and che
 
 Claude acted as the development agent, with human analysis driving the need.
 
+| Brief | Exploited timeline |
+|---|---|
+| ![The Brief: a one-line verdict, apps with updates available, and macOS/Safari status](docs/screenshots/brief.png) | ![The Exploited page: CISA KEV listings that touch this Mac, as a month-grouped timeline](docs/screenshots/exploited.png) |
+| A one-line verdict, the packages behind it, updates available, and macOS and Safari status. | CISA's exploited listings over time. **This Mac** shows only what touches your installed software; **Everything** shows the whole feed. |
+
 It runs entirely as **your user account**. You don't need root, an admin password, Full Disk Access or a helper daemon. Heimdall reads metadata your account can already read, and it never changes anything.
 
 ## What it reads
@@ -35,7 +40,7 @@ Matches come from published affected-version ranges, except where noted *inferre
 - **OSV.dev:** package names and versions.
 - **NVD:** product names and versions, e.g. `mozilla:firefox:144.0`.
 - **App Store:** bundle IDs of App Store apps. **Sparkle feeds:** each app's own update URL is fetched.
-- **Vendor feeds, Exploit-DB, Metasploit, nuclei, cask index, EUVD, cvelistV5:** plain downloads (CVE IDs in the URL for cvelistV5/Vulnrichment). **VulnCheck:** your token.
+- **News feeds, vendor feeds, Exploit-DB, Metasploit, nuclei, cask index, EUVD, cvelistV5:** plain downloads (CVE IDs in the URL for cvelistV5/Vulnrichment). **VulnCheck:** your token.
 - **FIRST EPSS:** CVE ids.
 - **CISA KEV catalog and Apple's security-release index:** plain downloads.
 
@@ -63,7 +68,9 @@ The app is signed ad hoc, so the first launch needs a right-click → **Open**.
 
 - **⌘R** scans. The first scan without an NVD API key takes a few minutes, because NVD allows 5 requests per 30 s. Answers are cached for a day. A free key (Settings → Matching) is kept in your login keychain.
 - **Brief:** the exploited flaws to fix first, each with a copyable fix command, then this Mac's macOS and Safari status, counts by severity and by section, and what changed since the last scan.
-- **Exploited and section pages** (macOS & Safari, Applications, Homebrew, Languages): one row per vulnerable package. Click a row to open it into a card with its fix command and advisories. Click an advisory to see everything about it.
+- **Exploited:** a timeline of CISA KEV listings, grouped by month, with same-day listings for one product folded into a single line. A red dot means a vulnerable version is installed now; a green ring means the product is installed but no vulnerable version was found. Switch between **This Mac** and **Everything**, and between 30 days, 90 days and 12 months.
+- **News:** the last 30 days from SANS ISC, The Hacker News, Krebs, Sophos, Securelist, WeLiveSecurity, Schneier, Troy Hunt, Graham Cluley, Darknet Diaries, USOM (TR-CERT) and RansomLook. **This Mac** shows stories that name a CVE open here (red) or software installed here (pink); **Everything** shows the whole feed. Findings that are in the news get an "in the news" tag, and the Brief lists this week's stories about your Mac. Feeds are editable in Settings → News.
+- **Section pages** (macOS, Apps, Homebrew, Languages): one row per vulnerable package. Click a row to open it into a card with its fix command and advisories. Click an advisory to see everything about it.
 - **Advisories:** every advisory in one sortable list. **Inventory:** everything examined. **Sources:** what was read and how fresh it is.
 - Results show up as soon as the fast checks finish. The slower NVD lookups for apps and macOS fill in as they arrive.
 - **Ignoring:** right-click an advisory, or use the ⋯ menu on a package. Ignored items stay out of counts and the Dock badge.

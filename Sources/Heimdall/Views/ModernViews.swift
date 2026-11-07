@@ -13,6 +13,7 @@ struct ModernShell: View {
             List {
                 sidebarRow(.front, nil)
                 sidebarRow(.exploited, model.visible?.kevCount)
+                sidebarRow(.news, model.visible?.news.map { list in list.filter { $0.relevance != .general && ($0.published ?? .distantPast) > Date().addingTimeInterval(-7 * 86400) }.count })
                 Section {
                     ForEach([Page.system, .apps, .homebrew, .languages]) { p in
                         sidebarRow(p, p.desk.flatMap { model.visible?.findings(in: $0).count })
@@ -39,6 +40,7 @@ struct ModernShell: View {
                     case .inventory: ModernPageFrame(page: .inventory, scrolls: false) { ModernInventory() }
                     case .sources: ModernPageFrame(page: .sources) { ModernSources() }
                     case .exploited: ExploitedTimeline()
+                    case .news: NewsPage()
                     default: ModernFindingsPage(page: page)
                     }
                 }
@@ -186,6 +188,13 @@ struct ModernOverview: View {
             let urgent = r.findings.filter { $0.kevCount == 0 && $0.topSeverity >= .high }
             ModernPageFrame(page: .front) {
                 verdict(r, urgent: urgent.count)
+                // The packages behind "minor or unrated" / "no fixed release yet", right under the sentence.
+                if r.kevFindings.isEmpty && urgent.isEmpty && !r.findings.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(r.findings) { f in ModernFindingRow(finding: f) }
+                    }
+                    .padding(.leading, 16).padding(.top, 2)
+                }
                 if !r.kevFindings.isEmpty {
                     ModernHeading(title: "Fix First", count: r.kevFindings.count, tint: .red)
                     ForEach(r.kevFindings.map { f -> Finding in var f = f; f.vulns = f.vulns.filter(\.isKEV); return f }) { f in
@@ -202,6 +211,15 @@ struct ModernOverview: View {
                     ForEach(Array(stale.prefix(6))) { p in updateRow(p) }
                     if stale.count > 6 {
                         Button("Show all \(stale.count) in Inventory") { model.page = .inventory }
+                            .buttonStyle(.borderless).font(.system(size: 12, weight: .medium)).padding(.leading, 36).padding(.top, 2)
+                    }
+                }
+                let headlines = (r.news ?? []).filter { $0.relevance != .general && ($0.published ?? .distantPast) > Date().addingTimeInterval(-7 * 86400) }
+                if !headlines.isEmpty {
+                    ModernHeading(title: "In the News", count: headlines.count, tint: .pink)
+                    ForEach(Array(headlines.prefix(3))) { n in NewsRow(item: n) }
+                    if headlines.count > 3 {
+                        Button("All \(headlines.count) stories about this Mac") { model.page = .news }
                             .buttonStyle(.borderless).font(.system(size: 12, weight: .medium)).padding(.leading, 36).padding(.top, 2)
                     }
                 }
@@ -364,6 +382,7 @@ struct ModernFindingRow: View {
                 if f.topSeverity != .unknown { ThingsTag(text: f.topSeverity.title.lowercased(), tint: f.topSeverity.tint) }
                 if f.vulns.contains(where: \.hasPublicExploit) { ThingsTag(text: "public exploit", tint: .purple) }
                 if f.awaitingRelease == true { ThingsTag(text: "no fix released yet") }
+                if model.newsPackageIDs.contains(p.id) { ThingsTag(text: "in the news", tint: .pink) }
                 if p.outdated { ThingsTag(text: p.latest.map { "update → \($0)" } ?? "update ready", tint: .blue) }
                 Text(f.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
             }
@@ -786,5 +805,129 @@ struct TimelineRow: View {
             if let v = f.vulns.first(where: { $0.cves.contains(entry.cve) }) { return VulnSelection(finding: f, vuln: v) }
         }
         return nil
+    }
+}
+
+// MARK: - News
+
+struct NewsPage: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("newsEverything") private var everything = false
+    @State private var source = ""
+
+    var body: some View {
+        let all = model.visible?.news
+        let q = model.search.lowercased()
+        let list = (all ?? []).filter { (everything || $0.relevance != .general) && (source.isEmpty || $0.source == source) }
+            .filter { q.isEmpty || ($0.title + " " + $0.summary + " " + $0.cves.joined(separator: " ")).lowercased().contains(q) }
+        let sources = Array(Set((all ?? []).map(\.source))).sorted()
+        let days = Dictionary(grouping: list) { Calendar.current.startOfDay(for: $0.published ?? .distantPast) }.sorted { $0.key > $1.key }
+
+        ModernPageFrame(page: .news) {
+            HStack(spacing: 12) {
+                Picker("", selection: $everything) {
+                    Text("This Mac").tag(false)
+                    Text("Everything").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Picker("", selection: $source) {
+                    Text("All sources").tag("")
+                    ForEach(sources, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden().fixedSize()
+                Spacer()
+                let mine = (all ?? []).filter { $0.relevance != .general }.count
+                Text("\(mine) of \(all?.count ?? 0) stories touch this Mac").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            .controlSize(.small)
+
+            if all == nil {
+                Text("Rescan (⌘R) to fetch the news.").foregroundStyle(.secondary).padding(.top, 24)
+            } else if list.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(everything ? "No stories match." : "No story in the last 30 days names software on this Mac.").font(.system(size: 14))
+                    if !everything { Text("Switch to Everything for the full feed.").font(.system(size: 12.5)).foregroundStyle(.secondary) }
+                }
+                .padding(.top, 24)
+            }
+            ForEach(days, id: \.key) { d in
+                ModernHeading(title: dayTitle(d.key), count: d.value.count, tint: .pink)
+                ForEach(d.value) { n in NewsRow(item: n, dimmed: everything && n.relevance == .general) }
+            }
+        }
+    }
+
+    func dayTitle(_ d: Date) -> String {
+        if d == .distantPast { return "Undated" }
+        if Calendar.current.isDateInToday(d) { return "Today" }
+        if Calendar.current.isDateInYesterday(d) { return "Yesterday" }
+        return d.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+}
+
+struct NewsRow: View {
+    @Environment(AppModel.self) private var model
+    var item: NewsItem
+    var dimmed = false
+    @State private var open = false
+    @State private var hover = false
+
+    var body: some View {
+        let n = item
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Circle().fill(n.relevance == .affected ? Color.red : n.relevance == .installed ? Color.pink : Color.secondary.opacity(0.4))
+                    .frame(width: 8, height: 8).frame(width: 16)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(n.title).font(.system(size: 13.5, weight: n.relevance == .general ? .regular : .semibold)).lineLimit(open ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        Text(n.source + (n.published.map { " · " + $0.formatted(date: .omitted, time: .shortened) } ?? ""))
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                        if n.relevance == .affected { ThingsTag(text: "affects you", tint: .red, filled: true) }
+                        ForEach(n.mentions.prefix(2), id: \.self) { m in ThingsTag(text: m, tint: n.relevance == .affected ? .red : .pink) }
+                        if n.mentions.count > 2 { ThingsTag(text: "+\(n.mentions.count - 2)") }
+                        if !n.cves.isEmpty && n.relevance == .general { ThingsTag(text: plural(n.cves.count, "CVE")) }
+                    }
+                }
+                Spacer(minLength: 4)
+            }
+            .padding(.vertical, 6).padding(.horizontal, 10)
+            .background(RoundedRectangle(cornerRadius: 7).fill(hover && !open ? Color.primary.opacity(0.04) : .clear))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture { withAnimation(.snappy(duration: 0.22)) { open.toggle() } }
+
+            if open {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !n.summary.isEmpty { Text(n.summary).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true) }
+                    if !n.cves.isEmpty {
+                        Text(n.cves.prefix(12).joined(separator: "  ")).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if !n.mentions.isEmpty {
+                        Text((n.relevance == .affected ? "Open here: " : "Installed here: ") + n.mentions.joined(separator: ", "))
+                            .font(.system(size: 12.5)).foregroundStyle(n.relevance == .affected ? Color.red : Color.secondary)
+                    }
+                    HStack(spacing: 14) {
+                        if let u = URL(string: n.link), u.scheme == "https" || u.scheme == "http" {
+                            Button("Read at \(n.source)") { NSWorkspace.shared.open(u) }
+                            Button("Copy Link") { model.copy(n.link) }
+                        }
+                    }
+                    .buttonStyle(.borderless).font(.system(size: 12, weight: .medium))
+                }
+                .padding(.leading, 36).padding(.trailing, 10).padding(.bottom, 12).padding(.top, 2)
+                .transition(.opacity)
+            }
+        }
+        .background {
+            if open {
+                RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+            }
+        }
+        .padding(.vertical, open ? 6 : 0)
+        .opacity(dimmed ? 0.65 : 1)
     }
 }
