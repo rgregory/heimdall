@@ -653,9 +653,11 @@ struct TimelineGroup: Identifiable {
     var id: String { entries.map(\.cve).joined(separator: ",") }
     var first: TimelineEntry { entries[0] }
     var relevance: TimelineEntry.Relevance {
-        entries.contains { $0.relevance == .affected } ? .affected : entries.contains { $0.relevance == .installed } ? .installed : .elsewhere
+        if entries.contains(where: { $0.relevance == .affected }) { return .affected }
+        if entries.contains(where: { $0.relevance == .installed }) { return .installed }
+        return .elsewhere
     }
-    var ransomware: Bool { entries.contains(\.ransomware) }
+    var ransomware: Bool { entries.contains(where: { $0.ransomware }) }
     var packages: [String] { entries.flatMap(\.packages).uniqued() }
     var fix: String? { entries.compactMap(\.fix).first }
 
