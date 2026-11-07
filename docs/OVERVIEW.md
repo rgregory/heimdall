@@ -16,15 +16,15 @@ Details behind the [README](../README.md): how matching works, what leaves the M
 | Go binaries | build info embedded in binaries in `~/go/bin` (optionally Homebrew's bin), parsed directly | OSV.dev (Go, incl. `stdlib`) |
 | Browser extensions | `manifest.json` in Chrome, Brave, Edge, Vivaldi, Arc and Opera profiles; Firefox `extensions.json` | A community list of ~8,300 Chrome Web Store IDs removed for malware |
 
-**Vendor advisories** add exact fixed versions, often days ahead of NVD: Apple's per-release security notes for the macOS and Safari releases you're missing, Chrome Releases (stable channel), Mozilla Foundation Security Advisories (Firefox, ESR, Thunderbird), and Microsoft's MSRC monthly releases (Office for Mac, Teams, Edge, VS Code, matched by build number).
+Vendor advisories give exact fixed versions, often days before NVD does. Heimdall reads Apple's per-release security notes for the macOS and Safari releases you're missing, Chrome Releases (stable channel), Mozilla Foundation Security Advisories (Firefox, ESR, Thunderbird), and Microsoft's monthly MSRC releases (Office for Mac, Teams, Edge and VS Code, matched by build number).
 
-**Exploited and exploitable.** Every advisory is checked against CISA KEV, Microsoft's "Exploited: Yes", ENISA's EUVD exploited list, VulnCheck KEV (with a free token), and CISA's Vulnrichment SSVC "exploitation: active". Public exploit code is flagged from Exploit-DB, Metasploit and nuclei templates (your `~/nuclei-templates` checkout when present). FIRST EPSS adds the 30-day exploitation probability. Advisories with no score get one from the CVE record (cvelistV5) or CISA's Vulnrichment.
+Every advisory is checked against CISA KEV, Microsoft's "Exploited: Yes", ENISA's EUVD exploited list, VulnCheck KEV (with a free token), and CISA's Vulnrichment SSVC "exploitation: active". Public exploit code is flagged from Exploit-DB, Metasploit and nuclei templates (your `~/nuclei-templates` checkout when present). FIRST EPSS adds the probability of exploitation in the next 30 days. Advisories with no score get one from the CVE record (cvelistV5) or CISA's Vulnrichment.
 
-**Updates available.** Each app's own Sparkle feed, the Mac App Store, and Homebrew's cask index say whether a newer version exists. Heimdall only surfaces updates for software with a security issue; the rest are listed in Inventory.
+Each app's own Sparkle feed, the Mac App Store, and Homebrew's cask index say whether a newer version exists. Heimdall only brings up an update when it fixes a security issue. Other updates are listed in Inventory.
 
-**No fixed release yet.** When no advisory names a released version above what's installed (and Homebrew has nothing newer), Heimdall says so instead of suggesting an upgrade that does nothing. This is typical of OSS-Fuzz reports fixed by an unreleased commit.
+Sometimes no advisory names a released version newer than the one installed, and Homebrew has nothing newer either. Heimdall then says there's no fixed release yet, rather than suggesting an upgrade that won't change anything. This happens a lot with OSS-Fuzz reports that were fixed in a commit nobody has released yet.
 
-Matches come from published affected-version ranges, except where noted *inferred*: a KEV entry NVD hasn't analysed for your app yet (say, a fresh Chromium bug in Brave) is flagged when the copy on disk is older than the listing.
+Matches come from published ranges of affected versions. The exception is anything marked *inferred*: when NVD hasn't analysed a KEV entry for your app yet (a new Chromium bug in Brave, say), Heimdall flags it if your copy is older than the listing.
 
 ## What leaves the Mac
 
@@ -37,7 +37,7 @@ Matches come from published affected-version ranges, except where noted *inferre
 
 No paths, file contents or host names are sent. Offline mode (in Settings) uses cached data only and skips `brew vulns`.
 
-External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; OSV and NVD reject malformed or incomplete responses instead of caching them as clean results. A failed refresh preserves the previous cache and reports degraded coverage.
+External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; Malformed or incomplete OSV and NVD responses are rejected instead of being cached as clean results. If a refresh fails, the previous cache is kept and Sources reports reduced coverage.
 
 Copyable fix commands validate package names and fixed versions and quote their arguments. CSV exports neutralize spreadsheet formula prefixes in external text.
 
