@@ -11,44 +11,20 @@ Claude acted as the development agent, with human analysis driving the need.
 
 It runs entirely as **your user account**. You don't need root, an admin password, Full Disk Access or a helper daemon. Heimdall reads metadata your account can already read, and it never changes anything.
 
-## What it reads
+## Sources
 
-| Source | How | Matched with |
+| Installed software | Read from | Checked against |
 |---|---|---|
-| macOS, Safari | `SystemVersion.plist`, Safari's `Info.plist` | Apple security-release index + NVD (`cpe:o:apple:macos`) + Apple KEV entries |
-| Applications | `Info.plist` of bundles in `/Applications`, `/Applications/*/`, `~/Applications` | NVD by CPE and version (built-in map of ~70 apps, extendable) + KEV |
-| Homebrew formulae & casks | `brew info --json=v2 --installed` | `brew vulns --json` if your Homebrew has it, else OSV.dev by upstream git tag |
-| Python | `*.dist-info/METADATA` in system, Homebrew, user, pipx, uv, pyenv, conda and brew-vendored site-packages | OSV.dev (PyPI) |
-| npm | `package.json` in global `node_modules` (Homebrew, nvm, volta, fnm, bun, pnpm); dependencies optional | OSV.dev (npm) |
-| cargo | `~/.cargo/.crates2.json` | OSV.dev (crates.io) |
-| Ruby gems | gem specifications outside `/System` | OSV.dev (RubyGems) |
-| Go binaries | build info embedded in binaries in `~/go/bin` (optionally Homebrew's bin), parsed directly | OSV.dev (Go, incl. `stdlib`) |
-| Browser extensions | `manifest.json` in Chrome, Brave, Edge, Vivaldi, Arc and Opera profiles; Firefox `extensions.json` | A community list of ~8,300 Chrome Web Store IDs removed for malware |
+| macOS, Safari | `SystemVersion.plist`, `Info.plist` | Apple security releases and per-release notes, NVD |
+| Apps | `Info.plist` in `/Applications`, `~/Applications` | NVD (~70 mapped apps), Chrome Releases, Mozilla MFSA, Microsoft MSRC |
+| Homebrew | `brew info --installed` | `brew vulns`, else OSV.dev |
+| Python, npm, cargo, gems | package metadata on disk | OSV.dev |
+| Go binaries | embedded build info | OSV.dev (Go, incl. `stdlib`) |
+| Browser extensions | Chromium and Firefox profiles | malicious-extension list |
 
-**Vendor advisories** add exact fixed versions, often days ahead of NVD: Apple's per-release security notes for the macOS and Safari releases you're missing, Chrome Releases (stable channel), Mozilla Foundation Security Advisories (Firefox, ESR, Thunderbird), and Microsoft's MSRC monthly releases (Office for Mac, Teams, Edge, VS Code, matched by build number).
+Every advisory is then checked for **exploitation** (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC), **public exploits** (Exploit-DB, Metasploit, nuclei), **likelihood** (FIRST EPSS) and missing scores (cvelistV5, CISA Vulnrichment). Sparkle feeds, the App Store and Homebrew's cask index flag **newer versions**, and 14 **news** feeds are matched to what's installed. The icon turns red while anything exploited is installed.
 
-**Exploited and exploitable.** Every advisory is checked against CISA KEV, Microsoft's "Exploited: Yes", ENISA's EUVD exploited list, VulnCheck KEV (with a free token), and CISA's Vulnrichment SSVC "exploitation: active". Public exploit code is flagged from Exploit-DB, Metasploit and nuclei templates (your `~/nuclei-templates` checkout when present). FIRST EPSS adds the 30-day exploitation probability. Advisories with no score get one from the CVE record (cvelistV5) or CISA's Vulnrichment.
-
-**Updates available.** Each app's own Sparkle feed, the Mac App Store, and Homebrew's cask index say whether a newer version exists, CVEs or not.
-
-**The icon turns red** while anything exploited (or a malicious extension) is installed. It goes back to normal once that's fixed or ignored.
-
-Matches come from published affected-version ranges, except where noted *inferred*: a KEV entry NVD hasn't analysed for your app yet (say, a fresh Chromium bug in Brave) is flagged when the copy on disk is older than the listing.
-
-## What leaves the Mac
-
-- **OSV.dev:** package names and versions.
-- **NVD:** product names and versions, e.g. `mozilla:firefox:144.0`.
-- **App Store:** bundle IDs of App Store apps. **Sparkle feeds:** each app's own update URL is fetched.
-- **News feeds, vendor feeds, Exploit-DB, Metasploit, nuclei, cask index, EUVD, cvelistV5:** plain downloads (CVE IDs in the URL for cvelistV5/Vulnrichment). **VulnCheck:** your token.
-- **FIRST EPSS:** CVE ids.
-- **CISA KEV catalog and Apple's security-release index:** plain downloads.
-
-No paths, file contents or host names are sent. Offline mode (in Settings) uses cached data only and skips `brew vulns`.
-
-External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; OSV and NVD reject malformed or incomplete responses instead of caching them as clean results. A failed refresh preserves the previous cache and reports degraded coverage.
-
-Copyable fix commands validate package names and fixed versions and quote their arguments. CSV exports neutralize spreadsheet formula prefixes in external text.
+What's sent where, response limits, and per-app CPE mappings: [docs/OVERVIEW.md](docs/OVERVIEW.md).
 
 ## Build
 
@@ -86,14 +62,6 @@ build/heimdall-scan --save          # also update the report the app shows
 NVD_API_KEY=… build/heimdall-scan --no-apps --csv
 ```
 
-### Teaching it about more apps
-
-Add entries to `~/Library/Application Support/Heimdall/app-cpe.json` (Settings → Matching → *Edit app → CPE mappings…*). Your entries take priority over the built-in list:
-
-```json
-[{ "bundleID": "com.example.App", "cpe": ["example:app"], "kevVendor": "^example$", "kevProduct": "app" }]
-```
-
 ## Layout
 
 ```
@@ -103,11 +71,11 @@ Sources/heimdall-scan/     command-line scanner
 Tests/HeimdallCoreTests/   version ordering, CVSS, NVD applicability, parsers
 ```
 
-Data lives in `~/Library/Application Support/Heimdall` (reports, CPE overrides) and `~/Library/Caches/Heimdall` (feeds; safe to delete).
+Data lives in `~/Library/Application Support/Heimdall` (reports, [CPE overrides](docs/OVERVIEW.md#teaching-it-about-more-apps)) and `~/Library/Caches/Heimdall` (feeds; safe to delete).
 
 ## Limits
 
-- Only what your account can see. Apps installed per-user elsewhere, system daemons and other users' packages aren't covered. Argus covers the root-level view.
+- Only what your account can see. Apps installed per-user elsewhere, system daemons and other users' packages aren't covered.
 - Microsoft Office for Mac is left out of NVD matching on purpose. NVD describes Office by release year and channel, not build number, so version matching would be noise.
 - Homebrew formulae without `brew vulns` only match when OSV knows the upstream repo and the release tag lines up with the version.
 - Go vulnerability data carries no CVSS, so Go findings show as *unrated* unless they're on KEV.
