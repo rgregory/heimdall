@@ -20,7 +20,7 @@ Details behind the [README](../README.md): how matching works, what leaves the M
 
 **Exploited and exploitable.** Every advisory is checked against CISA KEV, Microsoft's "Exploited: Yes", ENISA's EUVD exploited list, VulnCheck KEV (with a free token), and CISA's Vulnrichment SSVC "exploitation: active". Public exploit code is flagged from Exploit-DB, Metasploit and nuclei templates (your `~/nuclei-templates` checkout when present). FIRST EPSS adds the 30-day exploitation probability. Advisories with no score get one from the CVE record (cvelistV5) or CISA's Vulnrichment.
 
-**Updates available.** Each app's own Sparkle feed, the Mac App Store, and Homebrew's cask index say whether a newer version exists, CVEs or not.
+**Updates available.** Each app's own Sparkle feed, the Mac App Store, and Homebrew's cask index say whether a newer version exists. Heimdall only surfaces updates for software with a security issue; the rest are listed in Inventory.
 
 **No fixed release yet.** When no advisory names a released version above what's installed (and Homebrew has nothing newer), Heimdall says so instead of suggesting an upgrade that does nothing. This is typical of OSS-Fuzz reports fixed by an unreleased commit.
 

@@ -42,7 +42,7 @@ func firstFix(_ v: Vulnerability, above version: String) -> String {
 
 // MARK: - Palette
 
-/// Warm paper behind the content, carried over from Argus.
+/// Warm paper behind the content.
 enum Ink {
     static let paper2 = Color.dyn(0xfaf7f0, 0x1d1c22)
 }
