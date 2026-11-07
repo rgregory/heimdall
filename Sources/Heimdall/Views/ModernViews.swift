@@ -353,9 +353,19 @@ struct ModernFindingsPage: View {
                     .foregroundStyle(.secondary).padding(.top, 30).frame(maxWidth: .infinity)
             }
             ForEach(groups, id: \.key) { g in
-                if groups.count > 1 || page == .exploited { ModernHeading(title: g.key.title, count: g.value.count, tint: page.tint) }
-                else { Spacer().frame(height: 12) }
-                ForEach(g.value) { f in ModernFindingRow(finding: f) }
+                if page == .languages {
+                    // One heading per language; modules collapse into the tool that carries them.
+                    let units = ParentGroup.group(g.value)
+                    ModernHeading(title: g.key.title, count: units.count, tint: page.tint)
+                    ForEach(units) { u in
+                        if let parent = u.parent, u.findings.count > 1 || g.key == .go { ParentGroupRow(group: u, parentName: parent) }
+                        else { ModernFindingRow(finding: u.findings[0]) }
+                    }
+                } else {
+                    if groups.count > 1 || page == .exploited { ModernHeading(title: g.key.title, count: g.value.count, tint: page.tint) }
+                    else { Spacer().frame(height: 12) }
+                    ForEach(g.value) { f in ModernFindingRow(finding: f) }
+                }
             }
         }
     }
@@ -906,5 +916,83 @@ struct NewsRow: View {
         }
         .padding(.vertical, open ? 6 : 0)
         .opacity(dimmed ? 0.65 : 1)
+    }
+}
+
+// MARK: - Language groups
+
+/// Findings that share a parent (a Go binary, a pipx app, a Homebrew-vendored venv) as one unit.
+struct ParentGroup: Identifiable {
+    var parent: String?
+    var findings: [Finding]
+    var id: String { (parent ?? "") + "|" + findings.map(\.id).joined(separator: ",") }
+    var vulns: [Vulnerability] { findings.flatMap(\.vulns) }
+    var kevCount: Int { findings.reduce(0) { $0 + $1.kevCount } }
+    var topSeverity: Severity { findings.map(\.topSeverity).max() ?? .unknown }
+    var priority: Double { findings.map(\.priority).max() ?? 0 }
+
+    static func group(_ list: [Finding]) -> [ParentGroup] {
+        var order: [String] = [], map: [String: [Finding]] = [:]
+        for f in list {
+            let k = f.package.parent.map { "p:" + $0 } ?? "f:" + f.id
+            if map[k] == nil { order.append(k) }
+            map[k, default: []].append(f)
+        }
+        return order.map { k in ParentGroup(parent: k.hasPrefix("p:") ? String(k.dropFirst(2)) : nil, findings: map[k]!.sorted { $0.priority > $1.priority }) }
+            .sorted { $0.priority > $1.priority }
+    }
+}
+
+/// "gitleaks · Go binary · 4 modules" with the worst tags; opens into its modules.
+struct ParentGroupRow: View {
+    @Environment(AppModel.self) private var model
+    var group: ParentGroup
+    var parentName: String
+    @State private var open = false
+    @State private var hover = false
+
+    var body: some View {
+        let g = group
+        let eco = g.findings.first?.package.ecosystem
+        let kind = eco == .go ? "Go binary" : eco == .pypi ? "Python app" : eco == .npm ? "npm package" : (eco?.title ?? "")
+        let modules = g.findings.filter { $0.package.name != "stdlib" }.count
+        let hasStdlib = g.findings.contains { $0.package.name == "stdlib" }
+        let detail = [modules > 0 ? plural(modules, eco == .go ? "module" : "dependency", eco == .go ? "modules" : "dependencies") : nil,
+                      hasStdlib ? "Go toolchain" : nil].compactMap { $0 }.joined(separator: " + ")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                SeverityRing(severity: g.topSeverity, exploited: g.kevCount > 0)
+                Text(parentName).font(.system(size: 13.5, weight: open ? .semibold : .regular)).lineLimit(1)
+                Text("\(kind) · \(detail)").font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 8)
+                if g.kevCount > 0 { ThingsTag(text: "exploited", tint: .red, filled: true) }
+                if g.topSeverity != .unknown { ThingsTag(text: g.topSeverity.title.lowercased(), tint: g.topSeverity.tint) }
+                if g.vulns.contains(where: \.hasPublicExploit) { ThingsTag(text: "public exploit", tint: .purple) }
+                Text(g.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
+            }
+            .padding(.vertical, 6).padding(.horizontal, 10)
+            .background(RoundedRectangle(cornerRadius: 7).fill(hover && !open ? Color.primary.opacity(0.04) : .clear))
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .onTapGesture { withAnimation(.snappy(duration: 0.22)) { open.toggle() } }
+
+            if open {
+                VStack(alignment: .leading, spacing: 6) {
+                    ModernCommand(text: g.findings.first?.fixHint ?? "")
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(g.findings) { f in ModernFindingRow(finding: f) }
+                    }
+                }
+                .padding(.leading, 26).padding(.trailing, 6).padding(.bottom, 10)
+                .transition(.opacity)
+            }
+        }
+        .background {
+            if open {
+                RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+            }
+        }
+        .padding(.vertical, open ? 6 : 0)
     }
 }
