@@ -28,10 +28,14 @@ struct HeimdallApp: App {
                     .disabled(model.report == nil)
             }
             CommandGroup(after: .sidebar) {
+                // ⌘1–⌘9 for the first nine pages; any beyond that get no shortcut ("10" isn't a key).
                 ForEach(Array(Page.allCases.enumerated()), id: \.element) { i, p in
-                    Button(p.title) { model.page = p }
-                        .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
-                        .disabled(i >= 9)
+                    if i < 9 {
+                        Button(p.title) { model.page = p }
+                            .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
+                    } else {
+                        Button(p.title) { model.page = p }
+                    }
                 }
             }
         }
