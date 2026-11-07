@@ -251,3 +251,28 @@ final class FixHintTests: XCTestCase {
         XCTAssertFalse(Scanner.awaitingRelease(py, [w]), "no fix info at all: don't claim anything")
     }
 }
+
+final class TimelineTests: XCTestCase {
+    func testNameMatch() {
+        XCTAssertTrue(Timeline.nameMatch("openssh", "OpenSSH"))
+        XCTAssertTrue(Timeline.nameMatch("php@8.3", "PHP"))
+        XCTAssertTrue(Timeline.nameMatch("next", "Next.js"))
+        XCTAssertFalse(Timeline.nameMatch("server", "Exchange Server"))
+        XCTAssertFalse(Timeline.nameMatch("ssh", "OpenSSH"))
+    }
+
+    func testRelevance() {
+        let j = #"{"catalogVersion":"x","vulnerabilities":[{"cveID":"CVE-2026-1","vendorProject":"Google","product":"Chromium V8","vulnerabilityName":"V8 bug","dateAdded":"2026-10-01","shortDescription":"","requiredAction":"","dueDate":"","knownRansomwareCampaignUse":"Unknown"},{"cveID":"CVE-2026-2","vendorProject":"OpenBSD","product":"OpenSSH","vulnerabilityName":"ssh bug","dateAdded":"2026-10-02","shortDescription":"","requiredAction":"","dueDate":"","knownRansomwareCampaignUse":"Known"},{"cveID":"CVE-2026-3","vendorProject":"Ivanti","product":"Connect Secure","vulnerabilityName":"vpn","dateAdded":"2026-10-03","shortDescription":"","requiredAction":"","dueDate":"","knownRansomwareCampaignUse":"Unknown"}]}"#
+        let kev = KEVCatalog.parse(Data(j.utf8))!
+        var chrome = Package(ecosystem: .app, name: "Google Chrome", version: "142.0"); chrome.bundleID = "com.google.Chrome"
+        let ssh = Package(ecosystem: .homebrew, name: "openssh", version: "10.0")
+        var v = Vulnerability(id: "CVE-2026-2"); v.kev = kev["CVE-2026-2"]
+        let t = Timeline.build(kev: kev, packages: [chrome, ssh], findings: [Finding(package: ssh, vulns: [v], fixHint: "brew upgrade openssh")], days: 100_000)
+        let by = Dictionary(uniqueKeysWithValues: t.map { ($0.cve, $0) })
+        XCTAssertEqual(by["CVE-2026-1"]?.relevance, .installed)
+        XCTAssertEqual(by["CVE-2026-2"]?.relevance, .affected)
+        XCTAssertEqual(by["CVE-2026-2"]?.fix, "brew upgrade openssh")
+        XCTAssertEqual(by["CVE-2026-3"]?.relevance, .elsewhere)
+        XCTAssertEqual(t.first?.cve, "CVE-2026-3", "newest first")
+    }
+}

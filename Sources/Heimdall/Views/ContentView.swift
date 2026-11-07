@@ -32,7 +32,7 @@ func filtered(_ list: [Finding], minSeverity: Severity, kevOnly: Bool) -> [Findi
 func pageSubtitle(_ page: Page) -> String {
     switch page {
     case .front: return "What Heimdall found on this Mac, most urgent first."
-    case .exploited: return "On CISA's Known Exploited Vulnerabilities list and present here. Fix these first."
+    case .exploited: return "CISA's known-exploited listings over time: what touches this Mac, and everything else."
     case .system: return "macOS and Safari against Apple's security releases, Apple's per-release notes and NVD."
     case .apps: return "Third-party apps (NVD, vendor advisories, KEV) and browser extensions (malicious-extension list)."
     case .homebrew: return "Formulae and casks, from brew vulns or OSV.dev by upstream release tag."

@@ -306,6 +306,7 @@ public struct Scanner: Sendable {
         let sorted = packages.sorted { ($0.ecosystem, $0.name.lowercased()) < ($1.ecosystem, $1.name.lowercased()) }
         var r = ScanReport(generated: Date(), posture: posture, packages: sorted, findings: findings, sources: sources)
         r.kevCatalogVersion = kev.version
+        r.timeline = Timeline.build(kev: kev, packages: packages, findings: findings)
         return r
     }
 

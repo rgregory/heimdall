@@ -38,6 +38,7 @@ struct ModernShell: View {
                     case .ledger: ModernPageFrame(page: .ledger, scrolls: false) { ModernLedger() }
                     case .inventory: ModernPageFrame(page: .inventory, scrolls: false) { ModernInventory() }
                     case .sources: ModernPageFrame(page: .sources) { ModernSources() }
+                    case .exploited: ExploitedTimeline()
                     default: ModernFindingsPage(page: page)
                     }
                 }
@@ -573,5 +574,168 @@ struct ChangeRow: View {
             Text(k).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
             Text(v).font(.system(size: 12.5)).lineLimit(1)
         }
+    }
+}
+
+// MARK: - Exploited timeline
+
+/// CISA KEV listings over time: "This Mac" shows only listings for software installed here
+/// (open ones in red, unaffected versions in green); "Everything" shows the whole feed.
+struct ExploitedTimeline: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("timelineScope") private var everything = false
+    @AppStorage("timelineDays") private var days = 90
+
+    var body: some View {
+        let r = model.visible
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
+        let q = model.search.lowercased()
+        let all = (r?.timeline ?? []).filter { ($0.date ?? .distantPast) >= cutoff }
+            .filter { q.isEmpty || "\($0.cve) \($0.vendor) \($0.product) \($0.name)".lowercased().contains(q) }
+        let mine = all.filter { $0.relevance != .elsewhere }
+        let shown = everything ? all : mine
+        let openNow = r?.kevFindings ?? []
+        let months = Dictionary(grouping: shown) { String($0.added.prefix(7)) }.sorted { $0.key > $1.key }
+
+        ModernPageFrame(page: .exploited) {
+            HStack(spacing: 12) {
+                Picker("", selection: $everything) {
+                    Text("This Mac").tag(false)
+                    Text("Everything").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Picker("", selection: $days) {
+                    Text("30 days").tag(30)
+                    Text("90 days").tag(90)
+                    Text("12 months").tag(365)
+                }
+                .labelsHidden().fixedSize()
+                Spacer()
+                Text(everything ? "\(all.count) listed · \(mine.count) touch this Mac" : "\(mine.count) of \(all.count) listings touch this Mac")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            .controlSize(.small)
+
+            if !openNow.isEmpty {
+                ModernHeading(title: "Open on This Mac", count: openNow.count, tint: .red)
+                ForEach(openNow.map { f -> Finding in var f = f; f.vulns = f.vulns.filter(\.isKEV); return f }) { f in ModernFindingRow(finding: f) }
+            }
+
+            if r?.timeline == nil {
+                Text("Rescan (⌘R) to build the timeline.").foregroundStyle(.secondary).padding(.top, 24)
+            } else if shown.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(everything ? "Nothing added to CISA's list in this period." : "Nothing CISA listed in the last \(days) days touches software on this Mac.")
+                        .font(.system(size: 14))
+                    if !everything { Text("Switch to Everything to see what's being exploited elsewhere.").font(.system(size: 12.5)).foregroundStyle(.secondary) }
+                }
+                .padding(.top, 24)
+            }
+            ForEach(months, id: \.key) { m in
+                ModernHeading(title: monthTitle(m.key), count: m.value.count, tint: .red)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(m.value) { e in TimelineRow(entry: e, dimmed: everything && e.relevance == .elsewhere) }
+                }
+            }
+        }
+    }
+
+    func monthTitle(_ ym: String) -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM"
+        guard let d = f.date(from: ym) else { return ym }
+        return d.formatted(.dateTime.month(.wide).year())
+    }
+}
+
+struct TimelineRow: View {
+    @Environment(AppModel.self) private var model
+    var entry: TimelineEntry
+    var dimmed: Bool
+    @State private var open = false
+    @State private var hover = false
+
+    var node: some View {
+        ZStack {
+            switch entry.relevance {
+            case .affected: Circle().fill(Color.red).frame(width: 11, height: 11)
+            case .installed: Circle().strokeBorder(Color.green, lineWidth: 2).frame(width: 11, height: 11).background(Circle().fill(Ink.paper2))
+            case .elsewhere: Circle().fill(Color.secondary.opacity(0.45)).frame(width: 7, height: 7)
+            }
+        }
+        .frame(width: 22, height: 22)
+    }
+
+    var body: some View {
+        let e = entry
+        HStack(alignment: .top, spacing: 0) {
+            Text(e.date?.formatted(.dateTime.month(.abbreviated).day()) ?? e.added)
+                .font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .trailing).padding(.top, 9)
+            // The rail: a continuous line with this listing's node on it.
+            ZStack(alignment: .top) {
+                Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 2).frame(maxHeight: .infinity)
+                node.padding(.top, 5)
+            }
+            .frame(width: 30)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(e.vendor) \(e.product)").font(.system(size: 13.5, weight: e.relevance == .elsewhere ? .regular : .semibold)).lineLimit(1)
+                    Text(e.cve).font(.system(size: 12)).foregroundStyle(.secondary)
+                    if e.ransomware { ThingsTag(text: "ransomware", tint: .red) }
+                    Spacer(minLength: 6)
+                    relevanceTag
+                }
+                Text(e.name).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(open ? nil : 1)
+                if open { detail.padding(.top, 4) }
+            }
+            .padding(.vertical, 7).padding(.horizontal, 10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(open ? Color(nsColor: .textBackgroundColor) : (hover ? Color.primary.opacity(0.04) : .clear)))
+            .shadow(color: .black.opacity(open ? 0.12 : 0), radius: 6, y: 2)
+            .padding(.vertical, 2)
+        }
+        .opacity(dimmed ? 0.6 : 1)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture { withAnimation(.snappy(duration: 0.22)) { open.toggle() } }
+    }
+
+    @ViewBuilder var relevanceTag: some View {
+        switch entry.relevance {
+        case .affected: ThingsTag(text: "affects " + (entry.packages.first ?? "this Mac"), tint: .red, filled: true)
+        case .installed: ThingsTag(text: "installed · not a vulnerable version", tint: .green)
+        case .elsewhere: EmptyView()
+        }
+    }
+
+    @ViewBuilder var detail: some View {
+        let e = entry
+        VStack(alignment: .leading, spacing: 8) {
+            if !e.summary.isEmpty { Text(e.summary).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true) }
+            if !e.packages.isEmpty {
+                Text((e.relevance == .affected ? "Vulnerable here: " : "Installed here: ") + e.packages.joined(separator: ", "))
+                    .font(.system(size: 12.5)).foregroundStyle(e.relevance == .affected ? Color.red : Color.secondary)
+            }
+            if e.relevance == .installed {
+                Text("Heimdall found this product but not a version the advisory data marks as vulnerable. If the listing is new, vendor data may still be catching up — keep it updated.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let fix = e.fix { ModernCommand(text: fix) }
+            HStack(spacing: 14) {
+                if e.relevance == .affected, let sel = selection() {
+                    Button("Full details…") { model.selectedVuln = sel }
+                }
+                Link("Open on NVD", destination: URL(string: "https://nvd.nist.gov/vuln/detail/\(e.cve)")!)
+                Link("CISA KEV", destination: URL(string: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=\(e.cve)")!)
+            }
+            .buttonStyle(.borderless).font(.system(size: 12, weight: .medium))
+        }
+    }
+
+    func selection() -> VulnSelection? {
+        guard let r = model.visible else { return nil }
+        for f in r.findings where entry.packageIDs.contains(f.package.id) {
+            if let v = f.vulns.first(where: { $0.cves.contains(entry.cve) }) { return VulnSelection(finding: f, vuln: v) }
+        }
+        return nil
     }
 }
