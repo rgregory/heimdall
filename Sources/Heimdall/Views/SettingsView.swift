@@ -13,8 +13,8 @@ struct SettingsView: View {
         }
         .frame(width: 560, height: 470)
         .onChange(of: model.options) { _, _ in model.persistOptions() }
-        .onChange(of: model.nvdAPIKey) { _, _ in model.persistKey() }
-        .onChange(of: model.vulnCheckToken) { _, _ in model.persistVulnCheck() }
+        .onAppear { model.loadSecrets() }
+        .onDisappear { model.persistSecrets() }
     }
 }
 
@@ -79,7 +79,7 @@ struct MatchingSettings: View {
         Form {
             Section {
                 Toggle("Look up apps, macOS and Safari in NVD", isOn: $model.options.nvd)
-                SecureField("NVD API key (optional)", text: $model.nvdAPIKey)
+                SecureField("NVD API key (optional)", text: $model.nvdAPIKey).onSubmit { model.persistSecrets() }
                 Link("Request a free NVD API key", destination: URL(string: "https://nvd.nist.gov/developers/request-an-api-key")!)
                 Toggle("Keep NVD matches that have no version bounds", isOn: $model.options.includeUnbounded)
             } header: { Text("NVD") } footer: {
@@ -89,7 +89,7 @@ struct MatchingSettings: View {
                 Toggle("Vendor advisories: Apple notes, Chrome Releases, Mozilla, Microsoft", isOn: $model.options.vendorFeeds)
                 Toggle("Score unrated advisories from CVE records and CISA Vulnrichment", isOn: $model.options.cveRecords)
                 Toggle("Exploited lists (EUVD, VulnCheck) and public exploits (Exploit-DB, Metasploit, nuclei)", isOn: $model.options.exploitSignals)
-                SecureField("VulnCheck API token (optional)", text: $model.vulnCheckToken)
+                SecureField("VulnCheck API token (optional)", text: $model.vulnCheckToken).onSubmit { model.persistSecrets() }
                 Toggle("Check for newer app versions (Sparkle, App Store, Homebrew casks)", isOn: $model.options.updateChecks)
                 Toggle("Fetch EPSS exploit-probability scores", isOn: $model.options.epss)
             } header: { Text("More sources") } footer: {

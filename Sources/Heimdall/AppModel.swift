@@ -88,8 +88,10 @@ final class AppModel {
         if let d = UserDefaults.standard.data(forKey: "scanOptions"), let o = try? JSONDecoder().decode(ScanOptions.self, from: d) { options = o }
         else { options = ScanOptions() }
         muted = Set(UserDefaults.standard.stringArray(forKey: "muted") ?? [])
-        nvdAPIKey = Keychain.get(account: "nvd-api-key") ?? ""
-        vulnCheckToken = Keychain.get(account: "vulncheck-token") ?? ""
+        // Keys are read from the keychain lazily (loadSecrets), not at launch: an unsigned
+        // `swift run` build is a "new app" to the keychain every time and would prompt on each launch.
+        nvdAPIKey = ""
+        vulnCheckToken = ""
         report = ReportStore.latest()
         previous = ReportStore.previous()
         updateBadge()
@@ -101,8 +103,38 @@ final class AppModel {
         if let d = try? JSONEncoder().encode(options) { UserDefaults.standard.set(d, forKey: "scanOptions") }
     }
     func persistMuted() { UserDefaults.standard.set(Array(muted), forKey: "muted"); updateBadge() }
-    func persistKey() { Keychain.set(nvdAPIKey, account: "nvd-api-key") }
-    func persistVulnCheck() { Keychain.set(vulnCheckToken, account: "vulncheck-token") }
+    @ObservationIgnored private var secretsLoaded = false
+    @ObservationIgnored private var savedNVD = ""
+    @ObservationIgnored private var savedVulnCheck = ""
+
+    /// Read saved keys, only if any were saved. Called when a scan starts or Settings opens.
+    func loadSecrets() {
+        guard !secretsLoaded else { return }
+        secretsLoaded = true
+        let d = UserDefaults.standard
+        // Settings from before this flag existed: look once, then remember the answer.
+        let legacy = d.object(forKey: "secrets.nvd") == nil
+        if legacy || d.bool(forKey: "secrets.nvd") { savedNVD = Keychain.get(account: "nvd-api-key") ?? "" }
+        if legacy || d.bool(forKey: "secrets.vulncheck") { savedVulnCheck = Keychain.get(account: "vulncheck-token") ?? "" }
+        d.set(!savedNVD.isEmpty, forKey: "secrets.nvd")
+        d.set(!savedVulnCheck.isEmpty, forKey: "secrets.vulncheck")
+        nvdAPIKey = savedNVD
+        vulnCheckToken = savedVulnCheck
+    }
+
+    /// Write keys back only when they changed (when Settings closes, not on every keystroke).
+    func persistSecrets() {
+        guard secretsLoaded else { return }
+        let d = UserDefaults.standard
+        if nvdAPIKey != savedNVD {
+            Keychain.set(nvdAPIKey, account: "nvd-api-key"); savedNVD = nvdAPIKey
+            d.set(!nvdAPIKey.isEmpty, forKey: "secrets.nvd")
+        }
+        if vulnCheckToken != savedVulnCheck {
+            Keychain.set(vulnCheckToken, account: "vulncheck-token"); savedVulnCheck = vulnCheckToken
+            d.set(!vulnCheckToken.isEmpty, forKey: "secrets.vulncheck")
+        }
+    }
 
     var autoScanHours: Int {
         get { let v = UserDefaults.standard.integer(forKey: "autoScanHours"); return v == 0 ? 12 : v }
@@ -130,6 +162,7 @@ final class AppModel {
         guard !scanning else { return }
         scanning = true; stage = "Starting"; progress = 0; lastError = nil
         let before = report?.partial == true ? previous : report
+        loadSecrets()
         let scanner = Scanner(options: options, nvdAPIKey: nvdAPIKey.isEmpty ? nil : nvdAPIKey,
                               vulnCheckToken: vulnCheckToken.isEmpty ? nil : vulnCheckToken)
         let model = self   // @MainActor class: safe to hand to other tasks; lives as long as the app
