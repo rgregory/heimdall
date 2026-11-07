@@ -7,12 +7,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum Page: String, CaseIterable, Identifiable, Hashable {
-    case front, exploited, system, apps, homebrew, languages, ledger, inventory, sources
+    case front, exploited, news, system, apps, homebrew, languages, ledger, inventory, sources
     var id: String { rawValue }
     var title: String {
         switch self {
         case .front: return "Brief"
         case .exploited: return "Exploited"
+        case .news: return "News"
         case .system: return "macOS"
         case .apps: return "Apps"
         case .homebrew: return "Homebrew"
@@ -26,6 +27,7 @@ enum Page: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .front: return "eye"
         case .exploited: return "flame"
+        case .news: return "newspaper"
         case .system: return "desktopcomputer"
         case .apps: return "square.grid.2x2"
         case .homebrew: return "mug"
@@ -49,6 +51,7 @@ enum Page: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .front: return .blue
         case .exploited: return .red
+        case .news: return .pink
         case .system: return .gray
         case .apps: return .indigo
         case .homebrew: return .orange
@@ -211,6 +214,9 @@ final class AppModel {
 
     /// Dock badge with the exploited count, and the icon turns red while anything exploited
     /// (or a malicious extension) is present. Back to normal once it's fixed or ignored.
+    /// Packages some recent story is about (for the "in the news" tag).
+    var newsPackageIDs: Set<String> { Set((visible?.news ?? []).flatMap(\.packageIDs)) }
+
     func updateBadge() {
         let n = visible?.kevCount ?? 0
         guard let app = NSApp else { return }

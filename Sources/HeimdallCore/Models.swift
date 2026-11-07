@@ -254,6 +254,8 @@ public struct ScanReport: Codable, Sendable {
     public var partial: Bool = false
     /// A year of CISA KEV listings, marked by relevance to this Mac.
     public var timeline: [TimelineEntry]? = nil
+    /// Security news from the last 30 days, matched to this Mac.
+    public var news: [NewsItem]? = nil
 
     public init(generated: Date, posture: SystemPosture, packages: [Package], findings: [Finding], sources: [SourceStatus]) {
         self.generated = generated; self.posture = posture; self.packages = packages; self.findings = findings; self.sources = sources

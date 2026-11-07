@@ -23,6 +23,9 @@ public struct ScanOptions: Codable, Sendable, Equatable {
     public var updateChecks = true
     /// Browser extensions in your profiles, against a malicious-extension list.
     public var extensions = true
+    /// Security news feeds, matched to what's installed.
+    public var news = true
+    public var newsFeeds: [NewsFeed] = NewsFeed.defaults
     public init() {}
 
     // Settings saved by older versions lack the newer keys; fill them with defaults.
@@ -43,6 +46,8 @@ public struct ScanOptions: Codable, Sendable, Equatable {
         exploitSignals = try c.decodeIfPresent(Bool.self, forKey: .exploitSignals) ?? d.exploitSignals
         updateChecks = try c.decodeIfPresent(Bool.self, forKey: .updateChecks) ?? d.updateChecks
         extensions = try c.decodeIfPresent(Bool.self, forKey: .extensions) ?? d.extensions
+        news = try c.decodeIfPresent(Bool.self, forKey: .news) ?? d.news
+        newsFeeds = try c.decodeIfPresent([NewsFeed].self, forKey: .newsFeeds) ?? d.newsFeeds
     }
 }
 
@@ -285,8 +290,14 @@ public struct Scanner: Sendable {
             }
         }
 
-        progress("Done", 1)
         var report = Self.assemble(packages: packages, vulns: vulns, posture: posture, sources: sources, kev: kev)
+        if options.news, !options.newsFeeds.isEmpty {
+            progress("Reading security news", 0.98)
+            let (items, st) = await News.load(feeds: options.newsFeeds, packages: report.packages, findings: report.findings, offline: options.offline)
+            report.news = items
+            report.sources.append(st)
+        }
+        progress("Done", 1)
         report.duration = Date().timeIntervalSince(started)
         return report
     }

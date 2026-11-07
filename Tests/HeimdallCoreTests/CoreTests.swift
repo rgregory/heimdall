@@ -276,3 +276,38 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(t.first?.cve, "CVE-2026-3", "newest first")
     }
 }
+
+final class NewsTests: XCTestCase {
+    func testParseRSSAndAtom() {
+        let rss = """
+        <rss><channel><item><title><![CDATA[Chrome zero-day CVE-2026-1111 exploited]]></title><link>https://x.test/a</link>
+        <pubDate>Sat, 07 Nov 2026 14:00:00 +0000</pubDate><description>&lt;p&gt;Google patched Chrome &amp;amp; more.&lt;/p&gt;</description></item></channel></rss>
+        """
+        let i = News.parse(rss, source: "T")
+        XCTAssertEqual(i.first?.title, "Chrome zero-day CVE-2026-1111 exploited")
+        XCTAssertEqual(i.first?.cves, ["CVE-2026-1111"])
+        XCTAssertNotNil(i.first?.published)
+        XCTAssertEqual(i.first?.summary, "Google patched Chrome & more.")
+        let atom = #"<feed><entry><title>Squid</title><link rel="alternate" href="https://s.test/1"/><published>2026-11-06T10:00:00Z</published><summary>text</summary></entry></feed>"#
+        XCTAssertEqual(News.parse(atom, source: "S").first?.link, "https://s.test/1")
+    }
+
+    func testMatching() {
+        var chrome = Package(ecosystem: .app, name: "Google Chrome", version: "130.0"); chrome.bundleID = "com.google.Chrome"
+        var word = Package(ecosystem: .app, name: "Microsoft Word", version: "16.1"); word.bundleID = "com.microsoft.Word"
+        let brew = Package(ecosystem: .homebrew, name: "openssh", version: "10.0")
+        var v = Vulnerability(id: "CVE-2026-1111")
+        v.summary = "x"
+        let m = News.Matcher(packages: [chrome, word, brew], findings: [Finding(package: chrome, vulns: [v])])
+        func item(_ t: String, _ c: [String] = []) -> NewsItem { NewsItem(title: t, link: t, source: "s", published: nil, summary: "", cves: c) }
+        XCTAssertEqual(m.match(item("Zero-day", ["CVE-2026-1111"])).relevance, .affected)
+        XCTAssertEqual(m.match(item("New Chrome update fixes bugs")).relevance, .installed)
+        XCTAssertEqual(m.match(item("OpenSSH 10.1 released")).relevance, .installed)
+        XCTAssertEqual(m.match(item("A word about passwords")).relevance, .general, "common words must not match")
+        XCTAssertEqual(m.match(item("Microsoft Word macro attacks")).relevance, .installed)
+        var ub = Package(ecosystem: .browserExtension, name: "uBlock Origin", version: "1.6"); ub.bundleID = "x"
+        let m2 = News.Matcher(packages: [ub], findings: [])
+        XCTAssertEqual(m2.match(item("Same-origin policy bypass")).relevance, .general)
+        XCTAssertEqual(m2.match(item("uBlock Origin pulled from store")).relevance, .installed)
+    }
+}

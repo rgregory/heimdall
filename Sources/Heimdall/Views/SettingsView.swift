@@ -8,6 +8,7 @@ struct SettingsView: View {
         TabView {
             SourcesSettings().tabItem { Label("Sources", systemImage: "tray.full") }
             MatchingSettings().tabItem { Label("Matching", systemImage: "link") }
+            NewsSettings().tabItem { Label("News", systemImage: "newspaper") }
             DisplaySettings().tabItem { Label("Display", systemImage: "paintbrush") }
         }
         .frame(width: 560, height: 470)
@@ -141,5 +142,48 @@ struct DisplaySettings: View {
         }
         .formStyle(.grouped)
         .onAppear { hours = model.autoScanHours }
+    }
+}
+
+struct NewsSettings: View {
+    @Environment(AppModel.self) private var model
+    @State private var name = ""
+    @State private var url = ""
+
+    var body: some View {
+        @Bindable var model = model
+        Form {
+            Section {
+                Toggle("Fetch security news and match it to this Mac", isOn: $model.options.news)
+            } footer: {
+                Text("Feeds are fetched at most hourly. Stories are matched by CVE ID and by the names of installed apps and Homebrew packages.").foregroundStyle(.secondary)
+            }
+            Section("Feeds") {
+                ForEach(model.options.newsFeeds, id: \.url) { f in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(f.name)
+                            Text(f.url).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button { model.options.newsFeeds.removeAll { $0.url == f.url } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
+                    }
+                }
+                HStack {
+                    TextField("Name", text: $name).frame(width: 140)
+                    TextField("https://…/feed", text: $url)
+                    Button("Add") {
+                        let u = url.trimmingCharacters(in: .whitespaces)
+                        guard u.hasPrefix("https://") || u.hasPrefix("http://") else { return }
+                        model.options.newsFeeds.append(NewsFeed(name: name.isEmpty ? (URL(string: u)?.host ?? u) : name, url: u))
+                        name = ""; url = ""
+                    }
+                    .disabled(url.isEmpty)
+                }
+                Button("Restore default feeds") { model.options.newsFeeds = NewsFeed.defaults }
+            }
+        }
+        .formStyle(.grouped)
+        .disabled(false)
     }
 }
