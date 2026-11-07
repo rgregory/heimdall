@@ -90,8 +90,8 @@ struct ModernCommand: View {
     @State private var copied = false
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary).font(.system(size: 11))
-            Text(text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).lineLimit(2)
+            Image(systemName: text.hasPrefix("No fixed release") ? "clock" : "wrench.and.screwdriver").foregroundStyle(.secondary).font(.system(size: 11))
+            Text(text).font(isCommand(text) ? .system(size: 12, design: .monospaced) : .system(size: 12.5)).textSelection(.enabled).lineLimit(3)
             Spacer(minLength: 4)
             if isCommand(text) {
                 Button(copied ? "Copied" : "Copy") {

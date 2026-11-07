@@ -298,7 +298,9 @@ public struct Scanner: Sendable {
             guard let p = byID[id] else { continue }
             let tagged = list.map { v -> Vulnerability in var v = v; if v.kev == nil { v.kev = kev.first(of: v.cves) }; return v }
             let merged = dedupe(tagged).sorted { $0.priority > $1.priority }
-            findings.append(Finding(package: p, vulns: merged, fixHint: fixHint(p, merged)))
+            var f = Finding(package: p, vulns: merged, fixHint: fixHint(p, merged))
+            if awaitingRelease(p, merged) { f.awaitingRelease = true }
+            findings.append(f)
         }
         findings.sort { $0.priority > $1.priority }
         let sorted = packages.sorted { ($0.ecosystem, $0.name.lowercased()) < ($1.ecosystem, $1.name.lowercased()) }
@@ -399,6 +401,22 @@ public struct Scanner: Sendable {
         return order.compactMap { groups[$0] }
     }
 
+    /// Nothing to upgrade to: no advisory names a released version above what's installed, and
+    /// (for Homebrew, which knows) the installed version is already the newest. Typical for
+    /// OSS-Fuzz reports fixed by a commit that hasn't shipped yet.
+    public static func awaitingRelease(_ p: Package, _ vulns: [Vulnerability]) -> Bool {
+        let released = vulns.contains { v in v.fixed.contains { !$0.hasPrefix("commit") && Version.compare($0, p.version) > 0 } }
+        guard !released else { return false }
+        switch p.ecosystem {
+        case .homebrew, .cask: return !p.outdated
+        case .pypi, .npm, .crates, .rubygems, .go:
+            // Without a "latest" for these, only say so when advisories carry fix info at all.
+            return vulns.allSatisfy { v in v.fixed.allSatisfy { $0.hasPrefix("commit") || Version.compare($0, p.version) <= 0 } }
+                && vulns.contains { !$0.fixed.isEmpty }
+        default: return false
+        }
+    }
+
     public static func fixHint(_ p: Package, _ vulns: [Vulnerability]) -> String {
         // Per advisory, the first fixed release above what's installed; then the highest of those.
         let firsts = vulns.compactMap { v in
@@ -406,6 +424,11 @@ public struct Scanner: Sendable {
         }
         let target = firsts.max(by: { Version.less($0, $1) })
         let to = target.map { " (fixed in \($0) or later)" } ?? ""
+        if awaitingRelease(p, vulns) {
+            let commit = vulns.flatMap(\.fixed).first { $0.hasPrefix("commit") }
+            return "No fixed release yet — \(p.name) \(p.version) is the newest available. "
+                + (commit.map { "Fixed upstream (\($0)); it arrives with the next release." } ?? "Watch for an update.")
+        }
         switch p.ecosystem {
         case .macos: return "System Settings → General → Software Update"
         case .homebrew: return "brew upgrade \(p.name)"

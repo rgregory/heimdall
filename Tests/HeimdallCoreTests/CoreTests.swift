@@ -235,3 +235,19 @@ final class SourceParserTests: XCTestCase {
         XCTAssertTrue(o.vendorFeeds)
     }
 }
+
+final class FixHintTests: XCTestCase {
+    func testAwaitingUpstreamRelease() {
+        var p = Package(ecosystem: .homebrew, name: "libssh2", version: "1.11.1")
+        var v = Vulnerability(id: "OSV-2025-433"); v.fixed = ["commit 1a2b3c4d5e"]
+        XCTAssertTrue(Scanner.awaitingRelease(p, [v]))
+        XCTAssertTrue(Scanner.fixHint(p, [v]).hasPrefix("No fixed release yet"))
+        p.outdated = true   // Homebrew has something newer: upgrading is worth it
+        XCTAssertEqual(Scanner.fixHint(p, [v]), "brew upgrade libssh2")
+        var py = Package(ecosystem: .pypi, name: "requests", version: "2.25.0")
+        var w = Vulnerability(id: "GHSA-x"); w.fixed = ["2.31.0"]
+        XCTAssertFalse(Scanner.awaitingRelease(py, [w]))
+        py.version = "2.32.0"; w.fixed = []
+        XCTAssertFalse(Scanner.awaitingRelease(py, [w]), "no fix info at all: don't claim anything")
+    }
+}

@@ -236,7 +236,11 @@ struct ModernOverview: View {
         } else if urgent > 0 {
             icon = "exclamationmark.circle.fill"; tint = .orange; text = "Nothing exploited. \(plural(urgent, "package")) with high-severity advisories."
         } else if n > 0 {
-            text = "Nothing urgent. \(plural(n, "package")) with minor or unrated advisories."
+            let waiting = r.findings.filter { $0.awaitingRelease == true }.count
+            let actionable = n - waiting
+            text = actionable > 0
+                ? "Nothing urgent. \(plural(actionable, "package")) with minor or unrated advisories" + (waiting > 0 ? "; \(waiting) waiting on an upstream release." : ".")
+                : "Nothing to do. \(plural(waiting, "package")) \(waiting == 1 ? "has" : "have") advisories with no fixed release yet."
         }
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: icon).foregroundStyle(tint)
@@ -358,6 +362,7 @@ struct ModernFindingRow: View {
                 if f.kevCount > 0 { ThingsTag(text: f.ransomware ? "exploited · ransomware" : "exploited", tint: .red, filled: true) }
                 if f.topSeverity != .unknown { ThingsTag(text: f.topSeverity.title.lowercased(), tint: f.topSeverity.tint) }
                 if f.vulns.contains(where: \.hasPublicExploit) { ThingsTag(text: "public exploit", tint: .purple) }
+                if f.awaitingRelease == true { ThingsTag(text: "no fix released yet") }
                 if p.outdated { ThingsTag(text: p.latest.map { "update → \($0)" } ?? "update ready", tint: .blue) }
                 Text(f.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
             }
