@@ -634,7 +634,7 @@ struct ExploitedTimeline: View {
             ForEach(months, id: \.key) { m in
                 ModernHeading(title: monthTitle(m.key), count: m.value.count, tint: .red)
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(m.value) { e in TimelineRow(entry: e, dimmed: everything && e.relevance == .elsewhere) }
+                    ForEach(TimelineGroup.group(m.value)) { g in TimelineRow(group: g, dimmed: everything && g.relevance == .elsewhere) }
                 }
             }
         }
@@ -647,16 +647,39 @@ struct ExploitedTimeline: View {
     }
 }
 
+/// Same day, same product: one line with all its CVEs (Plex ×4 on Oct 19 → one row).
+struct TimelineGroup: Identifiable {
+    var entries: [TimelineEntry]
+    var id: String { entries.map(\.cve).joined(separator: ",") }
+    var first: TimelineEntry { entries[0] }
+    var relevance: TimelineEntry.Relevance {
+        entries.contains { $0.relevance == .affected } ? .affected : entries.contains { $0.relevance == .installed } ? .installed : .elsewhere
+    }
+    var ransomware: Bool { entries.contains(\.ransomware) }
+    var packages: [String] { entries.flatMap(\.packages).uniqued() }
+    var fix: String? { entries.compactMap(\.fix).first }
+
+    static func group(_ list: [TimelineEntry]) -> [TimelineGroup] {
+        var order: [String] = [], map: [String: [TimelineEntry]] = [:]
+        for e in list {
+            let k = "\(e.added)|\(e.vendor)|\(e.product)"
+            if map[k] == nil { order.append(k) }
+            map[k, default: []].append(e)
+        }
+        return order.map { TimelineGroup(entries: map[$0]!.sorted { $0.cve < $1.cve }) }
+    }
+}
+
 struct TimelineRow: View {
     @Environment(AppModel.self) private var model
-    var entry: TimelineEntry
+    var group: TimelineGroup
     var dimmed: Bool
     @State private var open = false
     @State private var hover = false
 
     var node: some View {
         ZStack {
-            switch entry.relevance {
+            switch group.relevance {
             case .affected: Circle().fill(Color.red).frame(width: 11, height: 11)
             case .installed: Circle().strokeBorder(Color.green, lineWidth: 2).frame(width: 11, height: 11).background(Circle().fill(Ink.paper2))
             case .elsewhere: Circle().fill(Color.secondary.opacity(0.45)).frame(width: 7, height: 7)
@@ -665,13 +688,24 @@ struct TimelineRow: View {
         .frame(width: 22, height: 22)
     }
 
+    /// "SSRF ×2 · Path traversal · URI schemes" — the vulnerability names, shortened and counted.
+    var subtitle: String {
+        let names = group.entries.map { n -> String in
+            var t = n.name
+            for p in ["\(n.vendor) \(n.product) ", "\(n.product) "] where t.hasPrefix(p) { t = String(t.dropFirst(p.count)) }
+            return t.replacingOccurrences(of: " Vulnerability", with: "")
+        }
+        var counts: [String: Int] = [:], order: [String] = []
+        for n in names { if counts[n] == nil { order.append(n) }; counts[n, default: 0] += 1 }
+        return order.map { counts[$0]! > 1 ? "\($0) ×\(counts[$0]!)" : $0 }.joined(separator: " · ")
+    }
+
     var body: some View {
-        let e = entry
+        let g = group, e = group.first
         HStack(alignment: .top, spacing: 0) {
             Text(e.date?.formatted(.dateTime.month(.abbreviated).day()) ?? e.added)
                 .font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .trailing).padding(.top, 9)
-            // The rail: a continuous line with this listing's node on it.
             ZStack(alignment: .top) {
                 Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 2).frame(maxHeight: .infinity)
                 node.padding(.top, 5)
@@ -679,13 +713,14 @@ struct TimelineRow: View {
             .frame(width: 30)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(e.vendor) \(e.product)").font(.system(size: 13.5, weight: e.relevance == .elsewhere ? .regular : .semibold)).lineLimit(1)
-                    Text(e.cve).font(.system(size: 12)).foregroundStyle(.secondary)
-                    if e.ransomware { ThingsTag(text: "ransomware", tint: .red) }
+                    Text("\(e.vendor) \(e.product)").font(.system(size: 13.5, weight: g.relevance == .elsewhere ? .regular : .semibold)).lineLimit(1)
+                    if g.entries.count == 1 { Text(e.cve).font(.system(size: 12)).foregroundStyle(.secondary) }
+                    else { ThingsTag(text: "\(g.entries.count) CVEs") }
+                    if g.ransomware { ThingsTag(text: "ransomware", tint: .red) }
                     Spacer(minLength: 6)
                     relevanceTag
                 }
-                Text(e.name).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(open ? nil : 1)
+                Text(subtitle).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(open ? nil : 1)
                 if open { detail.padding(.top, 4) }
             }
             .padding(.vertical, 7).padding(.horizontal, 10)
@@ -700,38 +735,50 @@ struct TimelineRow: View {
     }
 
     @ViewBuilder var relevanceTag: some View {
-        switch entry.relevance {
-        case .affected: ThingsTag(text: "affects " + (entry.packages.first ?? "this Mac"), tint: .red, filled: true)
+        switch group.relevance {
+        case .affected: ThingsTag(text: "affects " + (group.packages.first ?? "this Mac"), tint: .red, filled: true)
         case .installed: ThingsTag(text: "installed · not a vulnerable version", tint: .green)
         case .elsewhere: EmptyView()
         }
     }
 
     @ViewBuilder var detail: some View {
-        let e = entry
+        let g = group
         VStack(alignment: .leading, spacing: 8) {
-            if !e.summary.isEmpty { Text(e.summary).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true) }
-            if !e.packages.isEmpty {
-                Text((e.relevance == .affected ? "Vulnerable here: " : "Installed here: ") + e.packages.joined(separator: ", "))
-                    .font(.system(size: 12.5)).foregroundStyle(e.relevance == .affected ? Color.red : Color.secondary)
+            // One line per CVE in the group.
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(g.entries) { e in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().fill(e.relevance == .affected ? Color.red : Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
+                        Link(e.cve, destination: URL(string: "https://nvd.nist.gov/vuln/detail/\(e.cve)")!)
+                            .font(.system(size: 12, weight: .medium)).frame(width: 128, alignment: .leading)
+                        Text(e.name).font(.system(size: 12.5)).lineLimit(1)
+                        if e.ransomware { ThingsTag(text: "ransomware", tint: .red) }
+                        Spacer(minLength: 4)
+                        if e.relevance == .affected, let sel = selection(e) {
+                            Button("Details…") { model.selectedVuln = sel }.buttonStyle(.borderless).font(.system(size: 11.5, weight: .medium))
+                        }
+                    }
+                }
             }
-            if e.relevance == .installed {
+            if g.entries.count == 1, !g.first.summary.isEmpty {
+                Text(g.first.summary).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+            }
+            if !g.packages.isEmpty {
+                Text((g.relevance == .affected ? "Vulnerable here: " : "Installed here: ") + g.packages.joined(separator: ", "))
+                    .font(.system(size: 12.5)).foregroundStyle(g.relevance == .affected ? Color.red : Color.secondary)
+            }
+            if g.relevance == .installed {
                 Text("Heimdall found this product but not a version the advisory data marks as vulnerable. If the listing is new, vendor data may still be catching up — keep it updated.")
                     .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            if let fix = e.fix { ModernCommand(text: fix) }
-            HStack(spacing: 14) {
-                if e.relevance == .affected, let sel = selection() {
-                    Button("Full details…") { model.selectedVuln = sel }
-                }
-                Link("Open on NVD", destination: URL(string: "https://nvd.nist.gov/vuln/detail/\(e.cve)")!)
-                Link("CISA KEV", destination: URL(string: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=\(e.cve)")!)
-            }
-            .buttonStyle(.borderless).font(.system(size: 12, weight: .medium))
+            if let fix = g.fix { ModernCommand(text: fix) }
+            Link("Open in CISA KEV", destination: URL(string: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=\(g.first.product.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")")!)
+                .buttonStyle(.borderless).font(.system(size: 12, weight: .medium))
         }
     }
 
-    func selection() -> VulnSelection? {
+    func selection(_ entry: TimelineEntry) -> VulnSelection? {
         guard let r = model.visible else { return nil }
         for f in r.findings where entry.packageIDs.contains(f.package.id) {
             if let v = f.vulns.first(where: { $0.cves.contains(entry.cve) }) { return VulnSelection(finding: f, vuln: v) }

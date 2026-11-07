@@ -91,6 +91,7 @@ final class AppModel {
         previous = ReportStore.previous()
         updateBadge()
         startScheduler()
+        ensureTimeline()
     }
 
     func persistOptions() {
@@ -145,6 +146,22 @@ final class AppModel {
                 model.report = r
                 model.scanning = false
                 model.updateBadge()
+            }
+        }
+    }
+
+    /// Reports saved before the timeline existed (or written offline) get one built from the
+    /// cached KEV catalog, so the Exploited page works without waiting for a rescan.
+    func ensureTimeline() {
+        guard let r = report, r.timeline == nil else { return }
+        let model = self
+        Task.detached(priority: .utility) {
+            let (kev, _) = await KEVCatalog.load(offline: false)
+            guard !kev.entries.isEmpty else { return }
+            let t = Timeline.build(kev: kev, packages: r.packages, findings: r.findings)
+            await MainActor.run {
+                guard model.report?.generated == r.generated, model.report?.timeline == nil else { return }
+                model.report?.timeline = t
             }
         }
     }
