@@ -312,6 +312,7 @@ public struct Scanner: Sendable {
             let merged = dedupe(tagged).sorted { $0.priority > $1.priority }
             var f = Finding(package: p, vulns: merged, fixHint: fixHint(p, merged))
             if awaitingRelease(p, merged) { f.awaitingRelease = true }
+            f.fixSteps = fixSteps(p, merged, packages: packages)
             findings.append(f)
         }
         findings.sort { $0.priority > $1.priority }
@@ -390,6 +391,59 @@ public struct Scanner: Sendable {
         for i in packages.indices where packages[i].ecosystem == .app {
             let file = (packages[i].location as NSString).lastPathComponent
             if let t = appToCask[file] { packages[i].cask = t }
+        }
+    }
+
+    /// Re-derive owners and advice for a saved report, so new advice shows without a rescan.
+    public static func refreshAdvice(_ r: inout ScanReport) {
+        Scanner(options: ScanOptions()).annotateGoOwners(&r.packages)
+        let byID = Dictionary(r.packages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for i in r.findings.indices {
+            if let p = byID[r.findings[i].package.id] { r.findings[i].package = p }
+            let p = r.findings[i].package, v = r.findings[i].vulns
+            r.findings[i].fixHint = fixHint(p, v)
+            r.findings[i].awaitingRelease = awaitingRelease(p, v) ? true : nil
+            r.findings[i].fixSteps = fixSteps(p, v, packages: r.packages)
+        }
+    }
+
+    /// Concrete "how": what to run, in order, and what to do if there's nothing to run yet.
+    public static func fixSteps(_ p: Package, _ vulns: [Vulnerability], packages: [Package]) -> [String] {
+        let fixedIn = vulns.compactMap { v in v.fixed.filter { isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) }) }
+            .max(by: { Version.less($0, $1) })
+        switch p.ecosystem {
+        case .go:
+            let bin = p.parent ?? "the binary"
+            let what = p.name == "stdlib" ? "Go \(p.version)" : "\(p.name) \(p.version)"
+            let fix = fixedIn.map { p.name == "stdlib" ? " (fixed in Go \($0))" : " (fixed in \($0))" } ?? ""
+            let main = packages.first { $0.ecosystem == .go && $0.parent == p.parent && $0.source.hasPrefix("Go main module") }?.name
+            if let f = p.brewFormula {
+                var steps = ["\(bin) is installed by Homebrew and was built with \(what)\(fix)."]
+                steps.append(p.outdated ? "Homebrew has a newer build:" : "Check whether Homebrew has rebuilt it since:")
+                steps.append("brew update && brew upgrade \(f)")
+                if !p.outdated, let main {
+                    steps.append("If Homebrew hasn't caught up, build the newest upstream release yourself (needs Go), then remove the Homebrew copy so this one is used:")
+                    steps.append("go install \(main)@latest && brew uninstall \(f)")
+                }
+                steps.append("Until then, the flaw is only reachable when \(bin) processes input you don't control.")
+                return steps
+            }
+            if let app = p.ownerApp {
+                return ["\(bin) ships inside \(app) and was built with \(what)\(fix).", fixHint(p, vulns),
+                        "If the newest \(app) still bundles it, the fix is waiting on the vendor."]
+            }
+            if let main {
+                return ["\(bin) was built with \(what)\(fix). Rebuild it from the newest release:", "go install \(main)@latest"]
+            }
+            return ["\(bin) was built with \(what)\(fix). Rebuild or upgrade it."]
+        case .homebrew, .cask:
+            if awaitingRelease(p, vulns) {
+                return ["\(p.name) \(p.version) is the newest Homebrew has; no released version fixes this yet.",
+                        "Check again later:", "brew update && brew upgrade \(p.ecosystem == .cask ? "--cask " : "")\(p.name)"]
+            }
+            return ["brew update && " + fixHint(p, vulns)]
+        default:
+            return [fixHint(p, vulns)]
         }
     }
 

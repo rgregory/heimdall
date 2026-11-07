@@ -205,15 +205,6 @@ struct ModernOverview: View {
                     ModernHeading(title: "Worth Updating", count: urgent.count, tint: .orange)
                     ForEach(Array(urgent.prefix(5))) { f in ModernFindingRow(finding: f) }
                 }
-                let stale = r.outdatedPackages.filter { p in !r.findings.contains { $0.package.id == p.id } }
-                if !stale.isEmpty {
-                    ModernHeading(title: "Updates Available", count: stale.count, tint: .blue)
-                    ForEach(Array(stale.prefix(6))) { p in updateRow(p) }
-                    if stale.count > 6 {
-                        Button("Show all \(stale.count) in Inventory") { model.page = .inventory }
-                            .buttonStyle(.borderless).font(.system(size: 12, weight: .medium)).padding(.leading, 36).padding(.top, 2)
-                    }
-                }
                 let headlines = (r.news ?? []).filter { $0.relevance != .general && ($0.published ?? .distantPast) > Date().addingTimeInterval(-7 * 86400) }
                 if !headlines.isEmpty {
                     ModernHeading(title: "In the News", count: headlines.count, tint: .pink)
@@ -375,6 +366,7 @@ struct ModernFindingsPage: View {
 struct ModernFindingRow: View {
     @Environment(AppModel.self) private var model
     var finding: Finding
+    var showParent = true
     @State private var open = false
     @State private var all = false
     @State private var hover = false
@@ -384,16 +376,18 @@ struct ModernFindingRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 SeverityRing(severity: f.topSeverity, exploited: f.kevCount > 0)
-                Text(p.name).font(.system(size: 13.5, weight: open ? .semibold : .regular)).lineLimit(1)
-                Text(p.version).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
-                if let parent = p.parent { Text("in \(parent)").font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1) }
+                Text(showParent ? (p.parent.map { "\($0) · \(shortModule(p.name))" } ?? p.name) : shortModule(p.name))
+                    .font(.system(size: 13.5, weight: open ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
+                Text(shortVersion(p.version)).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    if f.vulns.contains(where: \.hasPublicExploit) { RowIcon(symbol: "hammer.fill", tint: .purple, help: "Public exploit code exists") }
+                    if model.newsPackageIDs.contains(p.id) { RowIcon(symbol: "newspaper.fill", tint: .pink, help: "In the news this week") }
+                    if f.awaitingRelease == true { RowIcon(symbol: "clock", tint: .secondary, help: "No fixed release yet") }
+                    else if p.outdated { RowIcon(symbol: "arrow.down.circle", tint: .blue, help: p.latest.map { "Update available: \($0)" } ?? "Update available") }
+                }
                 if f.kevCount > 0 { ThingsTag(text: f.ransomware ? "exploited · ransomware" : "exploited", tint: .red, filled: true) }
-                if f.topSeverity != .unknown { ThingsTag(text: f.topSeverity.title.lowercased(), tint: f.topSeverity.tint) }
-                if f.vulns.contains(where: \.hasPublicExploit) { ThingsTag(text: "public exploit", tint: .purple) }
-                if f.awaitingRelease == true { ThingsTag(text: "no fix released yet") }
-                if model.newsPackageIDs.contains(p.id) { ThingsTag(text: "in the news", tint: .pink) }
-                if p.outdated { ThingsTag(text: p.latest.map { "update → \($0)" } ?? "update ready", tint: .blue) }
+                else if f.topSeverity != .unknown { ThingsTag(text: f.topSeverity.title.lowercased(), tint: f.topSeverity.tint) }
                 Text(f.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
             }
             .padding(.vertical, 6).padding(.horizontal, 10)
@@ -411,7 +405,7 @@ struct ModernFindingRow: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text([p.ecosystem.title, p.source, p.location].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
-                    ModernCommand(text: f.fixHint)
+                    FixSteps(steps: f.fixSteps ?? [f.fixHint])
                     VStack(spacing: 0) {
                         ForEach(f.vulns.prefix(all ? f.vulns.count : 8)) { v in ModernVulnRow(finding: f, vuln: v) }
                     }
@@ -969,10 +963,10 @@ struct ParentGroupRow: View {
                 Text("\(kind) · \(detail)").font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 8)
                 if g.kevCount > 0 { ThingsTag(text: "exploited", tint: .red, filled: true) }
-                if g.topSeverity != .unknown { ThingsTag(text: g.topSeverity.title.lowercased(), tint: g.topSeverity.tint) }
-                if g.vulns.contains(where: \.hasPublicExploit) { ThingsTag(text: "public exploit", tint: .purple) }
-                if waiting { ThingsTag(text: first?.brewFormula != nil ? "no fixed build yet" : "no fix released yet") }
-                else if first?.outdated == true, let f = first?.brewFormula { ThingsTag(text: "brew upgrade \(f)", tint: .blue) }
+                else if g.topSeverity != .unknown { ThingsTag(text: g.topSeverity.title.lowercased(), tint: g.topSeverity.tint) }
+                if g.vulns.contains(where: \.hasPublicExploit) { RowIcon(symbol: "hammer.fill", tint: .purple, help: "Public exploit code exists") }
+                if waiting { RowIcon(symbol: "clock", tint: .secondary, help: first?.brewFormula != nil ? "No fixed build yet" : "No fixed release yet") }
+                else if first?.outdated == true { RowIcon(symbol: "arrow.down.circle", tint: .blue, help: "Update available") }
                 Text(g.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
             }
             .padding(.vertical, 6).padding(.horizontal, 10)
@@ -983,9 +977,9 @@ struct ParentGroupRow: View {
 
             if open {
                 VStack(alignment: .leading, spacing: 6) {
-                    ModernCommand(text: g.findings.first?.fixHint ?? "")
+                    if let f = g.findings.first { FixSteps(steps: f.fixSteps ?? [f.fixHint]) }
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(g.findings) { f in ModernFindingRow(finding: f) }
+                        ForEach(g.findings) { f in ModernFindingRow(finding: f, showParent: false) }
                     }
                 }
                 .padding(.leading, 26).padding(.trailing, 6).padding(.bottom, 10)

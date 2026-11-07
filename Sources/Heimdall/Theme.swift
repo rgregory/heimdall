@@ -81,6 +81,47 @@ struct ThingsTag: View {
             .foregroundStyle(filled ? .white : tint)
             .padding(.horizontal, 7).padding(.vertical, 1.5)
             .background(Capsule().fill(filled ? AnyShapeStyle(tint) : AnyShapeStyle(tint.opacity(0.12))))
+            .lineLimit(1).fixedSize()
+    }
+}
+
+struct RowIcon: View {
+    var symbol: String
+    var tint: Color
+    var help: String
+    var body: some View {
+        Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(tint).help(help)
+    }
+}
+
+/// "github.com/andybalholm/brotli" → "brotli"; "golang.org/x/net/http2" → "x/net/http2" stays readable.
+func shortModule(_ name: String) -> String {
+    guard name.contains("/") else { return name }
+    let parts = name.split(separator: "/").map(String.init)
+    if parts.first == "golang.org", parts.count >= 3 { return parts.dropFirst().joined(separator: "/") }
+    var last = parts.last ?? name
+    if last.range(of: #"^v\d+$"#, options: .regularExpression) != nil, parts.count >= 2 { last = parts[parts.count - 2] + "/" + last }
+    return last
+}
+
+/// "v0.0.0-20240101-abcdef+dirty" → "0.0.0 (dev)", "v1.2.3+incompatible" → "1.2.3".
+func shortVersion(_ v: String) -> String {
+    var s = v.hasPrefix("v") ? String(v.dropFirst()) : v
+    if let plus = s.firstIndex(of: "+") { s = String(s[..<plus]) }
+    if let r = s.range(of: #"-(0\.)?\d{14}-[0-9a-f]{12}$"#, options: .regularExpression) { s = String(s[..<r.lowerBound]) + " (dev)" }
+    return s
+}
+
+/// Fix steps: sentences as text, commands as copyable lines.
+struct FixSteps: View {
+    var steps: [String]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { _, s in
+                if isCommand(s) { ModernCommand(text: s) }
+                else { Text(s).font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            }
+        }
     }
 }
 

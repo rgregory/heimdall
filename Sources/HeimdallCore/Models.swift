@@ -202,6 +202,8 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
     public var fixHint: String = ""
     /// No released version fixes these yet (only an upstream commit, or nothing newer exists).
     public var awaitingRelease: Bool? = nil
+    /// "How to fix it": ordered steps, commands or plain sentences.
+    public var fixSteps: [String]? = nil
 
     public var id: String { package.id }
     public var kevCount: Int { vulns.filter(\.isKEV).count }

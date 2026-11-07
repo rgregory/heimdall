@@ -92,7 +92,7 @@ final class AppModel {
         // `swift run` build is a "new app" to the keychain every time and would prompt on each launch.
         nvdAPIKey = ""
         vulnCheckToken = ""
-        report = ReportStore.latest()
+        if var r = ReportStore.latest() { Scanner.refreshAdvice(&r); report = r }
         previous = ReportStore.previous()
         updateBadge()
         startScheduler()
