@@ -810,49 +810,26 @@ struct TimelineRow: View {
 
 // MARK: - News
 
+/// All the news, newest first; stories about this Mac are highlighted in place.
 struct NewsPage: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("newsEverything") private var everything = false
-    @State private var source = ""
 
     var body: some View {
         let all = model.visible?.news
         let q = model.search.lowercased()
-        let list = (all ?? []).filter { (everything || $0.relevance != .general) && (source.isEmpty || $0.source == source) }
-            .filter { q.isEmpty || ($0.title + " " + $0.summary + " " + $0.cves.joined(separator: " ")).lowercased().contains(q) }
-        let sources = Array(Set((all ?? []).map(\.source))).sorted()
+        let list = (all ?? []).filter { q.isEmpty || ($0.title + " " + $0.summary + " " + $0.source + " " + $0.cves.joined(separator: " ")).lowercased().contains(q) }
         let days = Dictionary(grouping: list) { Calendar.current.startOfDay(for: $0.published ?? .distantPast) }.sorted { $0.key > $1.key }
+        let mine = (all ?? []).filter { $0.relevance != .general }.count
 
         ModernPageFrame(page: .news) {
-            HStack(spacing: 12) {
-                Picker("", selection: $everything) {
-                    Text("This Mac").tag(false)
-                    Text("Everything").tag(true)
-                }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
-                Picker("", selection: $source) {
-                    Text("All sources").tag("")
-                    ForEach(sources, id: \.self) { Text($0).tag($0) }
-                }
-                .labelsHidden().fixedSize()
-                Spacer()
-                let mine = (all ?? []).filter { $0.relevance != .general }.count
-                Text("\(mine) of \(all?.count ?? 0) stories touch this Mac").font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            .controlSize(.small)
-
-            if all == nil {
+            if let all {
+                Text("\(all.count) stories · \(mine) about this Mac").font(.system(size: 12)).foregroundStyle(.secondary)
+            } else {
                 Text("Rescan (⌘R) to fetch the news.").foregroundStyle(.secondary).padding(.top, 24)
-            } else if list.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(everything ? "No stories match." : "No story in the last 30 days names software on this Mac.").font(.system(size: 14))
-                    if !everything { Text("Switch to Everything for the full feed.").font(.system(size: 12.5)).foregroundStyle(.secondary) }
-                }
-                .padding(.top, 24)
             }
             ForEach(days, id: \.key) { d in
                 ModernHeading(title: dayTitle(d.key), count: d.value.count, tint: .pink)
-                ForEach(d.value) { n in NewsRow(item: n, dimmed: everything && n.relevance == .general) }
+                ForEach(d.value) { n in NewsRow(item: n) }
             }
         }
     }

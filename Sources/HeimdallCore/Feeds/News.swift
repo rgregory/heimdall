@@ -130,9 +130,18 @@ public enum News {
                                           "six", "wheel", "pip", "setuptools", "packaging", "certifi", "idna", "git", "make", "core", "tree",
                                           "watch", "less", "jq", "wget", "curl", "open", "ruby", "python", "node", "go", "rust", "java", "docker",
                                           "terminal", "slack", "zoom", "signal", "teams", "edge", "arc", "notion", "bear", "things", "spark",
-                                          "magnet", "raycast", "alfred", "postman", "hermes", "gemini", "parallels"]
+                                          "magnet", "raycast", "alfred", "postman", "hermes", "gemini", "parallels",
+                                          "container", "watchman", "glow", "tree", "fish", "starship"]
 
         static let vendors: Set<String> = ["google", "microsoft", "mozilla", "adobe", "apple", "cisco", "vmware", "oracle", "jetbrains", "brave"]
+
+        /// Ordinary English words ("container", "watchman", "things") make poor product names to search
+        /// prose for. macOS ships a word list; elsewhere the built-in stop list has to do.
+        static let dictionary: Set<String> = {
+            guard let t = try? String(contentsOfFile: "/usr/share/dict/words", encoding: .utf8) else { return [] }
+            return Set(t.split(separator: "\n").map { $0.lowercased() })
+        }()
+        static func isWord(_ n: String) -> Bool { common.contains(n) || dictionary.contains(n) }
 
         init(packages: [Package], findings: [Finding]) {
             for f in findings { for v in f.vulns { for c in v.cves { openCVE[c, default: []].append(f) } } }
@@ -145,7 +154,10 @@ public enum News {
                     let n = p.name.lowercased().replacingOccurrences(of: #"@.*$"#, with: "", options: .regularExpression).trimmed
                     // Distinctive names only: long enough, not a common word. Short-but-distinctive
                     // vendors (Zoom, Slack, Docker) are still matched via their full "Vendor Product" form below.
-                    if n.count >= 5, !Self.common.contains(n) { names.append((n, p)) }
+                    // Apps ("Safari", "Chrome") are fine as plain words; CLI tools and extensions
+                    // ("container", "watchman") must not be dictionary words.
+                    let wordy = p.ecosystem == .app ? Self.common.contains(n) : Self.isWord(n)
+                    if n.count >= 5, !n.contains(" "), !wordy { names.append((n, p)) }
                     let parts = n.split(separator: " ")
                     if parts.count >= 2 { names.append((n, p)) }   // "google chrome", "microsoft word"
                     // "Google Chrome" → also "chrome"; only for big vendors, so "uBlock Origin" doesn't become "origin".
@@ -169,8 +181,12 @@ public enum News {
             }
         }
 
+        /// Feeds whose items are about victims or episodes, not software: shown, never matched.
+        static let unmatched = ["RansomLook", "Darknet Diaries"]
+
         func match(_ item: NewsItem) -> NewsItem {
             var it = item
+            if Self.unmatched.contains(where: { item.source.hasPrefix($0) }) { return it }
             var ids: [String] = [], mentions: [String] = []
             for c in item.cves {
                 if let fs = openCVE[c] {

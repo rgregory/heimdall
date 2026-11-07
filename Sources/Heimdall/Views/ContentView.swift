@@ -33,7 +33,7 @@ func pageSubtitle(_ page: Page) -> String {
     switch page {
     case .front: return "What Heimdall found on this Mac, most urgent first."
     case .exploited: return "CISA's known-exploited listings over time: what touches this Mac, and everything else."
-    case .news: return "Security news from the last 30 days. This Mac shows stories that name software installed here."
+    case .news: return "Security news from the last 30 days. Stories that name software installed here are highlighted."
     case .system: return "macOS and Safari against Apple's security releases, Apple's per-release notes and NVD."
     case .apps: return "Third-party apps (NVD, vendor advisories, KEV) and browser extensions (malicious-extension list)."
     case .homebrew: return "Formulae and casks, from brew vulns or OSV.dev by upstream release tag."

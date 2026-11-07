@@ -309,5 +309,20 @@ final class NewsTests: XCTestCase {
         let m2 = News.Matcher(packages: [ub], findings: [])
         XCTAssertEqual(m2.match(item("Same-origin policy bypass")).relevance, .general)
         XCTAssertEqual(m2.match(item("uBlock Origin pulled from store")).relevance, .installed)
+        let m3 = News.Matcher(packages: [Package(ecosystem: .homebrew, name: "container", version: "1.7.1")], findings: [])
+        XCTAssertEqual(m3.match(item("Maersk is one of the largest container lines")).relevance, .general)
+        var rl = item("maersk By whitearmor", ["CVE-2026-1111"]); rl.source = "RansomLook"
+        XCTAssertEqual(m.match(rl).relevance, .general, "victim posts are never matched")
+    }
+}
+
+final class NewsWordTests: XCTestCase {
+    func testAppsSurviveDictionary() {
+        var saf = Package(ecosystem: .app, name: "Safari", version: "27.2"); saf.bundleID = "com.apple.Safari"
+        var chrome = Package(ecosystem: .app, name: "Google Chrome", version: "142"); chrome.bundleID = "com.google.Chrome"
+        let m = News.Matcher(packages: [saf, chrome], findings: [])
+        func item(_ t: String) -> NewsItem { NewsItem(title: t, link: t, source: "s", published: nil, summary: "", cves: []) }
+        XCTAssertEqual(m.match(item("Safari zero-day patched")).relevance, .installed)
+        XCTAssertEqual(m.match(item("Chrome 143 fixes 20 bugs")).relevance, .installed)
     }
 }
