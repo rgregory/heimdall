@@ -68,3 +68,7 @@ build/
 *.xcodeproj
 .DS_Store
 _to_delete/
+
+# Exported reports: these carry the host name, the full inventory and real paths.
+heimdall-*.json
+heimdall-*.csv
