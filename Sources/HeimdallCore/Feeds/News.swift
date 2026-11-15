@@ -48,10 +48,12 @@ public enum News {
         let cache = DiskCache("news")
         let results: [(NewsFeed, [NewsItem]?)] = await concurrentMap(feeds, width: 6) { f in
             let key = "feed-" + stableHash(f.url) + ".xml"
-            var d = cache.data(key, maxAge: offline ? nil : 3600)
-            if d == nil && !offline {
-                d = try? await HTTP.get(f.url, headers: ["Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5"])
-                if let d { cache.store(key, d) } else { d = cache.data(key) }   // stale beats nothing
+            let accept = "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5"
+            var d: Data?
+            if case .downloaded(let body) = await cache.fetch(key, from: f.url, maxAge: 3600, offline: offline, headers: ["Accept": accept]) {
+                cache.store(key, body); d = body
+            } else {
+                d = cache.data(key)   // fresh, confirmed by a 304, or stale and better than nothing
             }
             guard let d else { return (f, nil) }
             return (f, parse(String(decoding: d, as: UTF8.self), source: f.name))

@@ -75,6 +75,8 @@ final class AppModel {
     var search = ""
     var selectedVuln: VulnSelection?
     var lastError: String?
+    /// False until the stored report has been read from disk — the UI shouldn't call it "no scan yet" before then.
+    var loaded = false
 
     // Persisted by persist() — called from Settings' onChange and after mute changes.
     var options: ScanOptions
@@ -92,11 +94,33 @@ final class AppModel {
         // `swift run` build is a "new app" to the keychain every time and would prompt on each launch.
         nvdAPIKey = ""
         vulnCheckToken = ""
-        if var r = ReportStore.latest() { Scanner.refreshAdvice(&r); report = r }
-        previous = ReportStore.previous()
-        updateBadge()
-        startScheduler()
-        ensureTimeline()
+        loadStored()
+    }
+
+    /// Decoding a large report and re-deriving its fix advice costs real time, so it happens off
+    /// the main actor: the window comes up straight away and fills in a moment later.
+    private func loadStored() {
+        let model = self
+        Task.detached(priority: .userInitiated) {
+            let latest: ScanReport? = {
+                guard var r = ReportStore.latest() else { return nil }
+                Scanner.refreshAdvice(&r)
+                return r
+            }()
+            let prev = ReportStore.previous()
+            await MainActor.run {
+                model.report = latest
+                model.previous = prev
+                model.loaded = true
+                model.updateBadge()
+                model.ensureTimeline()
+                model.startScheduler()
+                // Nothing stored at all: first run, so scan whatever the schedule says.
+                if latest == nil, !model.scanning { model.scan() }
+            }
+        }
+        // Everything under ~/Library/Caches/Heimdall is re-downloadable; keep it from growing forever.
+        Task.detached(priority: .background) { CacheMaintenance.sweep() }
     }
 
     func persistOptions() {
@@ -230,7 +254,7 @@ final class AppModel {
         var list: [Finding]
         switch page {
         case .exploited: list = r.kevFindings.map { f in var f = f; f.vulns = f.vulns.filter(\.isKEV); return f }
-        default: list = page.desk.map { r.findings(in: $0) } ?? r.findings
+        default: list = page.desk.map { r.findings(in: $0) } ?? r.findings.sorted { $0.risk.score > $1.risk.score }
         }
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty {

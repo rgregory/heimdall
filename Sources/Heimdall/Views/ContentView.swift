@@ -12,7 +12,6 @@ struct ContentView: View {
             VulnDetail(selection: sel).environment(model)
         }
         .preferredColorScheme(scheme)
-        .onAppear { if model.report == nil && !model.scanning { model.scan() } }
     }
 
     var scheme: ColorScheme? {

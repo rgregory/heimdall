@@ -88,6 +88,9 @@ public struct Package: Codable, Hashable, Identifiable, Sendable {
     /// Go binaries: the Homebrew formula or app bundle that installed the binary.
     public var brewFormula: String? = nil
     public var ownerApp: String? = nil
+    /// A product that drops helper binaries outside an .app bundle — "/Library/Application
+    /// Support/fuse-t/bin/go-nfsv4" belongs to fuse-t, which is what you actually update.
+    public var ownerProduct: String? = nil
 
     public var id: String { "\(ecosystem.rawValue):\(parent.map { $0 + ">" } ?? "")\(name)@\(version)@\(location)" }
 
@@ -191,7 +194,8 @@ public struct Vulnerability: Codable, Hashable, Identifiable, Sendable {
 
     /// Sort key: exploited first, then severity, then EPSS.
     public var priority: Double {
-        (isKEV ? 1000 : 0) + (hasPublicExploit ? 60 : 0) + Double(severity.rank) * 100 + (cvss ?? 0) * 5 + (epss ?? 0) * 50
+        (isKEV ? 1000 : 0) + (kev?.ransomware == true ? 250 : 0) + (hasPublicExploit ? 60 : 0)
+            + Double(severity.rank) * 100 + (cvss ?? 0) * 5 + (epss ?? 0) * 50
     }
 }
 
@@ -208,8 +212,46 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
     public var id: String { package.id }
     public var kevCount: Int { vulns.filter(\.isKEV).count }
     public var topSeverity: Severity { vulns.map(\.severity).max() ?? .unknown }
+    /// What the advisories say, on their own.
     public var priority: Double { vulns.map(\.priority).max() ?? 0 }
     public var ransomware: Bool { vulns.contains { $0.kev?.ransomware == true } }
+
+    /// What the advisories say, adjusted for this Mac: whether there is anything to install, and
+    /// whether you run this code yourself. Computed, never stored, so it tracks the latest advice.
+    public var risk: Risk {
+        var score = priority
+        var factors: [String] = []
+        if kevCount > 0 { factors.append("exploited in the wild") }
+        if ransomware { factors.append("used in ransomware campaigns") }
+        if vulns.contains(where: \.hasPublicExploit) { factors.append("public exploit code") }
+        if let e = vulns.compactMap(\.epss).max(), e >= 0.05 {
+            factors.append("\(Int((e * 100).rounded()))% chance of attack in 30 days")
+        }
+        // Two advisories of equal severity are not equal work: one is a command, the other is a wait.
+        let blocked = awaitingRelease == true
+        if blocked {
+            score -= 400
+            factors.append("nothing to install yet")
+        } else if !fixHint.isEmpty {
+            score += 150
+            factors.append("fixable now")
+        }
+        // Something bundled inside another program: you don't invoke it, and the vulnerable code
+        // may not even be reached. Still real, just not the first thing to spend an evening on.
+        if package.parent != nil {
+            score -= 60
+            factors.append("bundled inside \(package.parent ?? "another program")")
+        }
+        return Risk(score: score, factors: factors, blocked: blocked)
+    }
+}
+
+/// A finding's rank, and the reasons behind it — shown on the row so the order is never a mystery.
+public struct Risk: Sendable, Hashable {
+    public var score: Double
+    public var factors: [String]
+    /// Exploited or severe, but nothing to install: it belongs on the list, not on tonight's list.
+    public var blocked: Bool
 }
 
 public struct SourceStatus: Codable, Hashable, Identifiable, Sendable {
@@ -270,10 +312,10 @@ public struct ScanReport: Codable, Sendable {
     /// Exploited in the wild, or a malicious extension: worth turning the icon red for.
     public var urgent: Bool { kevCount > 0 }
     public var outdatedPackages: [Package] { packages.filter { $0.outdated && $0.latest != nil } }
-    public var kevFindings: [Finding] { findings.filter { $0.kevCount > 0 }.sorted { $0.priority > $1.priority } }
+    public var kevFindings: [Finding] { findings.filter { $0.kevCount > 0 }.sorted { $0.risk.score > $1.risk.score } }
     public var kevCount: Int { Set(allVulns.filter { $0.1.isKEV }.map { $0.0.id + $0.1.headlineID }).count }
     public func findings(in desk: Desk) -> [Finding] {
-        findings.filter { $0.package.ecosystem.desk == desk }.sorted { $0.priority > $1.priority }
+        findings.filter { $0.package.ecosystem.desk == desk }.sorted { $0.risk.score > $1.risk.score }
     }
     public func count(_ s: Severity) -> Int { allVulns.filter { $0.1.severity == s }.count }
 }

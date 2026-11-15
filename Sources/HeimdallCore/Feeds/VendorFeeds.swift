@@ -120,10 +120,12 @@ public enum MozillaAdvisories {
     public static func open(product: String, installed: String, offline: Bool) async -> [Vulnerability] {
         let cache = DiskCache("mozilla")
         let listURL = "https://www.mozilla.org/en-US/security/known-vulnerabilities/\(product)/"
-        var list = cache.data("list-\(product).html", maxAge: offline ? nil : 12 * 3600)
-        if list == nil && !offline {
-            list = try? await HTTP.get(listURL)
-            if let list { cache.store("list-\(product).html", list) } else { list = cache.data("list-\(product).html") }
+        let listKey = "list-\(product).html"
+        var list: Data?
+        if case .downloaded(let d) = await cache.fetch(listKey, from: listURL, maxAge: 12 * 3600, offline: offline) {
+            cache.store(listKey, d); list = d
+        } else {
+            list = cache.data(listKey)   // fresh, confirmed by a 304, or stale and better than nothing
         }
         guard let list else { return [] }
         let html = String(decoding: list, as: UTF8.self)
@@ -197,10 +199,12 @@ public enum MSRC {
     public static func load(since: Date, offline: Bool) async -> ([Entry], SourceStatus) {
         let cache = DiskCache("msrc")
         var months: [(String, Date)] = []
-        var index = cache.data("updates.json", maxAge: offline ? nil : 86400)
-        if index == nil && !offline {
-            index = try? await HTTP.get("https://api.msrc.microsoft.com/cvrf/v3.0/updates", headers: ["Accept": "application/json"])
-            if let index { cache.store("updates.json", index) } else { index = cache.data("updates.json") }
+        var index: Data?
+        if case .downloaded(let d) = await cache.fetch("updates.json", from: "https://api.msrc.microsoft.com/cvrf/v3.0/updates",
+                                                      maxAge: 86400, offline: offline, headers: ["Accept": "application/json"]) {
+            cache.store("updates.json", d); index = d
+        } else {
+            index = cache.data("updates.json")
         }
         if let d = index {
             for v in (jsonObject(d) as? [String: Any])?["value"] as? [[String: Any]] ?? [] {

@@ -432,10 +432,46 @@ public struct Scanner: Sendable {
                 return ["\(bin) ships inside \(app) and was built with \(what)\(fix).", fixHint(p, vulns),
                         "If the newest \(app) still bundles it, the fix is waiting on the vendor."]
             }
+            if let product = p.ownerProduct {
+                let folder = (p.location as NSString).deletingLastPathComponent
+                let reach = "Until then, the flaw is only reachable when \(bin) processes input you don't control."
+                if p.outdated {
+                    var steps = ["\(bin) is part of \(product) and was built with \(what)\(fix)."]
+                    steps.append("A newer \(product) is available:")
+                    steps.append(p.cask.map { "brew upgrade --cask \($0)" } ?? p.brewFormula.map { "brew update && brew upgrade \($0)" }
+                                 ?? "Update \(product) from its vendor — it installed this binary in \(folder) and replaces it on update.")
+                    steps.append(reach)
+                    return steps
+                }
+                // The owner is already current, so there is no build to install — upgrading would no-op.
+                var steps = ["No fixed build yet — \(product) is current and still ships \(bin) built with \(what)\(fix)."]
+                steps.append("\(p.name) is compiled into \(bin), so there is nothing here to upgrade or rebuild: the fix arrives when \(product) ships a build made against a newer \(p.name).")
+                if let c = p.cask {
+                    steps.append("Check again once they do:")
+                    steps.append("brew upgrade --cask \(c)")
+                } else {
+                    steps.append("Watch \(product) for a release above the one in \(folder).")
+                }
+                steps.append(reach)
+                return steps
+            }
             if let main {
                 return ["\(bin) was built with \(what)\(fix). Rebuild it from the newest release:", "go install \(main)@latest"]
             }
-            return ["\(bin) was built with \(what)\(fix). Rebuild or upgrade it."]
+            return ["\(bin) was built with \(what)\(fix).",
+                    "\(p.name) is compiled into \(bin), so there is nothing to upgrade on its own — a fixed \(bin) has to come from whoever built it."]
+        case .app:
+            guard isEdge(p) else { return [fixHint(p, vulns)] }
+            let fixedNote = fixedIn.map { "; the advisories here are fixed in \($0)" } ?? ""
+            var steps = ["Microsoft Edge \(p.version) is installed\(fixedNote)."]
+            steps.append("Edge on macOS updates through EdgeUpdater, not Microsoft AutoUpdate, and rolls out in stages — edge://settings/help can report \"up to date\" while a newer build exists.")
+            if let c = p.cask {
+                steps.append("brew upgrade --cask \(c)")
+            } else {
+                steps.append("To take it now rather than wait for the rollout, install the current build over the top:")
+                steps.append("https://www.microsoft.com/edge/download")
+            }
+            return steps
         case .homebrew, .cask:
             if awaitingRelease(p, vulns) {
                 return ["\(p.name) \(p.version) is the newest Homebrew has; no released version fixes this yet.",
@@ -451,7 +487,9 @@ public struct Scanner: Sendable {
     /// is "brew upgrade gitleaks" (or "no fixed build yet"), not "go install".
     func annotateGoOwners(_ packages: inout [Package]) {
         var formulae: [String: Package] = [:]
-        for p in packages where p.ecosystem == .homebrew { formulae[p.name] = p }
+        var byToken: [String: Package] = [:]
+        for p in packages where p.ecosystem == .homebrew { formulae[p.name] = p; byToken[p.name.lowercased()] = p }
+        for p in packages where p.ecosystem == .cask { byToken[p.name.lowercased()] = p }
         let apps = packages.filter { $0.ecosystem == .app && !$0.location.isEmpty }
         for i in packages.indices where packages[i].ecosystem == .go {
             let loc = packages[i].location
@@ -461,12 +499,42 @@ public struct Scanner: Sendable {
                 packages[i].source += " · Homebrew \(f.name) \(f.version)"
             } else if let app = apps.first(where: { loc.hasPrefix($0.location + "/") }) {
                 packages[i].ownerApp = app.name
+                packages[i].outdated = app.outdated
                 packages[i].cask = app.cask
                 packages[i].appStore = app.appStore
                 packages[i].source += " · inside \(app.name) \(app.version)"
+            } else if let product = Self.vendorFolder(loc) {
+                packages[i].ownerProduct = product
+                // Installed by Homebrew after all, just not into a keg (casks run the vendor's installer).
+                if let owner = byToken[product.lowercased()] {
+                    if owner.ecosystem == .cask { packages[i].cask = owner.name } else { packages[i].brewFormula = owner.name }
+                    packages[i].outdated = owner.outdated
+                    packages[i].source += " · part of \(product) \(owner.version)"
+                } else {
+                    packages[i].source += " · part of \(product)"
+                }
             }
         }
     }
+
+    /// Edge Stable, Beta, Dev and Canary all carry a com.microsoft.edgemac bundle identifier.
+    static func isEdge(_ p: Package) -> Bool { p.bundleID?.hasPrefix("com.microsoft.edgemac") == true }
+
+    /// Helper binaries a product drops outside an .app bundle, named by the folder it owns:
+    /// "/Library/Application Support/fuse-t/bin/go-nfsv4-1.2.9" → "fuse-t".
+    static func vendorFolder(_ path: String) -> String? {
+        if let m = path.firstMatch(#"/Application Support/([^/]+)/"#) { return m[1] }
+        if let m = path.firstMatch(#"/opt/([^/]+)/"#), !["homebrew", "local", "bin", "sbin"].contains(m[1]) { return m[1] }
+        if let m = path.firstMatch(#"/Library/([^/]+)/"#), !systemLibraryFolders.contains(m[1]) { return m[1] }
+        return nil
+    }
+
+    /// Folders under /Library that belong to macOS, not to a product.
+    static let systemLibraryFolders: Set<String> = [
+        "Application Support", "Frameworks", "Extensions", "LaunchAgents", "LaunchDaemons", "PrivilegedHelperTools",
+        "Containers", "Group Containers", "Developer", "Internet Plug-Ins", "Printers", "Audio", "Caches",
+        "Preferences", "Logs", "Services", "Fonts", "Mail", "QuickLook", "Scripts", "StagedExtensions",
+    ]
 
     /// One row per CVE: GHSA, PYSEC and OSV ids for the same CVE are merged.
     static func dedupe(_ list: [Vulnerability]) -> [Vulnerability] {
@@ -501,9 +569,10 @@ public struct Scanner: Sendable {
     /// (for Homebrew, which knows) the installed version is already the newest. Typical for
     /// OSS-Fuzz reports fixed by a commit that hasn't shipped yet.
     public static func awaitingRelease(_ p: Package, _ vulns: [Vulnerability]) -> Bool {
-        // A Go binary from Homebrew: the module may be fixed upstream, but you only get it when
-        // Homebrew rebuilds the formula. Nothing to do while the formula is already current.
-        if p.ecosystem == .go, p.brewFormula != nil { return !p.outdated }
+        // A Go binary with a known owner — a Homebrew formula, a product like fuse-t, an app:
+        // the module may be fixed upstream, but you only get it when the owner rebuilds. While
+        // the owner is already current there is nothing to install.
+        if p.ecosystem == .go, p.brewFormula != nil || p.ownerProduct != nil || p.ownerApp != nil { return !p.outdated }
         let released = vulns.contains { v in v.fixed.contains { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 } }
         guard !released else { return false }
         switch p.ecosystem {
@@ -529,6 +598,9 @@ public struct Scanner: Sendable {
             guard names.allSatisfy(Self.isPackageName) else { return "Update this package using its package manager; its metadata contains an invalid package name." }
         }
         let to = target.map { " (fixed in \($0) or later)" } ?? ""
+        if p.ecosystem == .go, p.brewFormula == nil, let product = p.ownerProduct, awaitingRelease(p, vulns) {
+            return "No fixed build yet — \(product) is current and still ships \(p.parent ?? "this binary") built with \(p.name == "stdlib" ? "Go \(p.version)" : "\(p.name) \(p.version)")\(to). It's fixed when \(product) rebuilds it."
+        }
         if p.ecosystem == .go, let f = p.brewFormula, awaitingRelease(p, vulns) {
             return "No fixed build yet — Homebrew's \(f) is current but was built with \(p.name == "stdlib" ? "Go \(p.version)" : "\(p.name) \(p.version)")\(to). It's fixed when Homebrew rebuilds \(f); brew upgrade picks that up."
         }
@@ -544,6 +616,9 @@ public struct Scanner: Sendable {
         case .app:
             if let c = p.cask { return "brew upgrade --cask \(Shell.quote(c))" }
             if p.appStore { return "Update \(p.name) from the App Store" }
+            // Edge left Microsoft AutoUpdate at version 113 and the MAU policy went obsolete at 140:
+            // it updates through EdgeUpdater, in staged rollouts, so its own check can lag.
+            if isEdge(p) { return "Install the current build from microsoft.com/edge/download\(target.map { " — needs \($0)" } ?? "")" }
             if MSRC.isMicrosoft(p) && p.bundleID != "com.microsoft.VSCode" { return "Help → Check for Updates (Microsoft AutoUpdate)\(target.map { " — needs build \($0)" } ?? "")" }
             return "Update \(p.name) from its menu (Check for Updates…)"
         case .pypi:
@@ -565,6 +640,11 @@ public struct Scanner: Sendable {
             if let app = p.ownerApp {
                 if let c = p.cask { return "brew upgrade --cask \(c)" }
                 return p.appStore ? "Update \(app) from the App Store" : "Update \(app) from its menu (Check for Updates…)"
+            }
+            if let product = p.ownerProduct {
+                if let c = p.cask { return "brew upgrade --cask \(Shell.quote(c))" }
+                if let f = p.brewFormula { return "brew upgrade \(Shell.quote(f))" }
+                return "Update \(product) — it installs \(bin)"
             }
             if p.name == "stdlib" { return "Rebuild or upgrade \(bin) with a newer Go toolchain\(to)" }
             return "Upgrade \(bin) (it embeds \(p.name)\(to))"

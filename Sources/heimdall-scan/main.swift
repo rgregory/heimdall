@@ -22,6 +22,7 @@ opts.apps = !args.contains("--no-apps")
 let quiet = args.contains("--quiet") || args.contains("--json") || args.contains("--csv")
 let err = FileHandle.standardError
 let env = ProcessInfo.processInfo.environment
+CacheMaintenance.sweep()   // the cache is shared with the app; whoever runs first prunes it
 let scanner = Scanner(options: opts, nvdAPIKey: env["NVD_API_KEY"], vulnCheckToken: env["VULNCHECK_TOKEN"])
 let report = await scanner.run { stage, f in
     if !quiet { err.write(Data(String(format: "[%3.0f%%] %@\n", f * 100, stage).utf8)) }

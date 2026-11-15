@@ -118,6 +118,8 @@ struct MatchingSettings: View {
 struct DisplaySettings: View {
     @Environment(AppModel.self) private var model
     @AppStorage("appearance") private var appearance = "system"
+    @AppStorage("menuBarEnabled") private var menuBarEnabled = true
+    @AppStorage("hideDockIcon") private var hideDockIcon = false
     @State private var hours = 12
 
     var body: some View {
@@ -136,12 +138,23 @@ struct DisplaySettings: View {
             }
             .onChange(of: hours) { _, h in model.autoScanHours = h }
             Section {
+                Toggle("Show Heimdall in the menu bar", isOn: $menuBarEnabled)
+                Toggle("Hide the Dock icon", isOn: $hideDockIcon).disabled(!menuBarEnabled)
+            } header: { Text("Menu bar") } footer: {
+                Text("With the Dock icon hidden Heimdall keeps running in the menu bar and the window opens from there, so the menu bar item has to stay. Takes effect straight away.").foregroundStyle(.secondary)
+            }
+            Section {
                 Text("\(model.muted.count) ignored item(s)")
                 Button("Stop ignoring everything") { model.muted = []; model.persistMuted() }.disabled(model.muted.isEmpty)
             }
         }
         .formStyle(.grouped)
         .onAppear { hours = model.autoScanHours }
+        .onChange(of: menuBarEnabled) { _, on in
+            if !on { hideDockIcon = false }   // never leave the app with no Dock icon and no menu bar item
+            Presentation.apply()
+        }
+        .onChange(of: hideDockIcon) { _, _ in Presentation.apply() }
     }
 }
 

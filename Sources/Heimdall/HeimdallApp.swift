@@ -6,6 +6,7 @@ import SwiftUI
 struct HeimdallApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var model = AppModel()
+    @AppStorage("menuBarEnabled") private var menuBarEnabled = true
 
     var body: some Scene {
         WindowGroup("Heimdall", id: "main") {
@@ -40,6 +41,14 @@ struct HeimdallApp: App {
             }
         }
 
+        // The menu bar item. Turning it off is blocked while the Dock icon is hidden (Settings ▸ Display).
+        MenuBarExtra(isInserted: $menuBarEnabled) {
+            MenuBarPanel().environment(model)
+        } label: {
+            MenuBarLabel().environment(model)
+        }
+        .menuBarExtraStyle(.window)
+
         Settings {
             SettingsView().environment(model)
         }
@@ -48,10 +57,22 @@ struct HeimdallApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
-        // Launched from `swift run` there is no bundle; make it a regular foreground app anyway.
-        NSApp.setActivationPolicy(.regular)
+        // Launched from `swift run` there is no bundle, so the policy is set explicitly either way:
+        // .regular normally, .accessory when the Dock icon is hidden.
+        Presentation.apply()
         if let icon = Icons.normal { NSApp.applicationIconImage = icon }
-        NSApp.activate(ignoringOtherApps: true)
+        if Presentation.dockIconHidden {
+            // A menu bar app shouldn't throw its window up at login; the panel opens it.
+            Task { @MainActor in
+                for w in NSApp.windows where w.isVisible && w.styleMask.contains(.titled) { w.close() }
+            }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+
+    /// With the Dock icon hidden, closing the window leaves Heimdall running in the menu bar.
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool {
+        !Presentation.dockIconHidden
+    }
 }

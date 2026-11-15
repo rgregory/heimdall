@@ -190,7 +190,7 @@ final class DownloadLimitTests: XCTestCase {
     func fetch(_ path: String) async throws -> Data {
         let c = URLSessionConfiguration.ephemeral
         c.protocolClasses = [DownloadProtocol.self]
-        return try await HTTP.send("https://heimdall.test/" + path, method: "GET", body: nil, headers: [:], maxBytes: 8, configuration: c)
+        return try await HTTP.send("https://heimdall.test/" + path, method: "GET", body: nil, headers: [:], maxBytes: 8, configuration: c).0
     }
     func testExactLimitSucceeds() async throws {
         let data = try await fetch("exact")

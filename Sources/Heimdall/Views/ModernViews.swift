@@ -151,10 +151,10 @@ struct ModernEmpty: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "eye").font(.system(size: 42, weight: .light)).foregroundStyle(.blue)
-            Text(model.scanning ? "Looking around…" : "No scan yet").font(.title2.bold())
+            Text(model.scanning ? "Looking around…" : (model.loaded ? "No scan yet" : "Reading the last report…")).font(.title2.bold())
             Text(model.scanning ? model.stage : "Heimdall reads only what your account can read.").foregroundStyle(.secondary)
             if model.scanning { ProgressView(value: model.progress).frame(width: 240) }
-            else { Button("Scan Now") { model.scan() }.controlSize(.large).buttonStyle(.borderedProminent) }
+            else if model.loaded { Button("Scan Now") { model.scan() }.controlSize(.large).buttonStyle(.borderedProminent) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -185,7 +185,11 @@ struct ModernOverview: View {
 
     var body: some View {
         if let r = model.visible {
-            let urgent = r.findings.filter { $0.kevCount == 0 && $0.topSeverity >= .high }
+            let urgent = r.findings.filter { $0.kevCount == 0 && $0.topSeverity >= .high }.sorted { $0.risk.score > $1.risk.score }
+            // Exploited and fixable is tonight's work; exploited with nothing to install is not.
+            let exploited = r.kevFindings.map { f -> Finding in var f = f; f.vulns = f.vulns.filter(\.isKEV); return f }
+            let fixFirst = exploited.filter { !$0.risk.blocked }
+            let blocked = exploited.filter { $0.risk.blocked }
             ModernPageFrame(page: .front) {
                 verdict(r, urgent: urgent.count)
                 // The packages behind "minor or unrated" / "no fixed release yet", right under the sentence.
@@ -195,11 +199,15 @@ struct ModernOverview: View {
                     }
                     .padding(.leading, 16).padding(.top, 2)
                 }
-                if !r.kevFindings.isEmpty {
-                    ModernHeading(title: "Fix First", count: r.kevFindings.count, tint: .red)
-                    ForEach(r.kevFindings.map { f -> Finding in var f = f; f.vulns = f.vulns.filter(\.isKEV); return f }) { f in
-                        ModernFindingRow(finding: f)
-                    }
+                if !fixFirst.isEmpty {
+                    ModernHeading(title: "Fix First", count: fixFirst.count, tint: .red)
+                    ForEach(fixFirst) { f in ModernFindingRow(finding: f) }
+                }
+                if !blocked.isEmpty {
+                    ModernHeading(title: "Blocked", count: blocked.count, tint: .red)
+                    Text("Exploited in the wild, but nothing to install yet — the fix is with whoever ships it.")
+                        .font(.system(size: 12.5)).foregroundStyle(.secondary).padding(.leading, 36).padding(.bottom, 2)
+                    ForEach(blocked) { f in ModernFindingRow(finding: f) }
                 }
                 if !urgent.isEmpty {
                     ModernHeading(title: "Worth Updating", count: urgent.count, tint: .orange)
@@ -242,7 +250,13 @@ struct ModernOverview: View {
         var icon = "checkmark.circle.fill", tint = Color.green
         var text = "All clear. \(plural(r.packages.count, "package")) read, nothing published against them."
         if kev > 0 {
-            icon = "flame.fill"; tint = .red; text = "\(plural(kev, "exploited flaw")) on this Mac. Fix these first."
+            let stuck = r.kevFindings.filter { $0.risk.blocked }.count
+            let now = r.kevFindings.count - stuck
+            icon = "flame.fill"; tint = .red
+            text = now > 0
+                ? "\(plural(kev, "exploited flaw")) on this Mac. Fix these first."
+                    + (stuck > 0 ? " \(stuck) of them \(stuck == 1 ? "has" : "have") no fix to install yet." : "")
+                : "\(plural(kev, "exploited flaw")) on this Mac, but nothing to install yet — each one is waiting on whoever ships it."
         } else if urgent > 0 {
             icon = "exclamationmark.circle.fill"; tint = .orange; text = "Nothing exploited. \(plural(urgent, "package")) with high-severity advisories."
         } else if n > 0 {
@@ -403,6 +417,10 @@ struct ModernFindingRow: View {
 
             if open {
                 VStack(alignment: .leading, spacing: 10) {
+                    if !f.risk.factors.isEmpty {
+                        Text("Ranked here because: " + f.risk.factors.joined(separator: " · "))
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
                     Text([p.ecosystem.title, p.source, p.location].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
                     FixSteps(steps: f.fixSteps ?? [f.fixHint])

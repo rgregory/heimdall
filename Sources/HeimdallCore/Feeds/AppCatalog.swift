@@ -118,17 +118,20 @@ public enum AppleReleases {
 
     public static func load(offline: Bool) async -> ([AppleRelease], SourceStatus) {
         let cache = DiskCache("feeds")
-        var html = cache.data("apple-security-releases.html", maxAge: offline ? nil : 12 * 3600)
+        var html: Data?
         var note = "cached"
-        if html == nil && !offline {
-            do {
-                let d = try await HTTP.get(url, headers: ["Accept-Language": "en-US"])
-                if parse(String(decoding: d, as: UTF8.self)).filter({ $0.product == "macOS" }).count >= 5 {
-                    cache.store("apple-security-releases.html", d); html = d; note = "downloaded"
-                } else { note = "page format not recognized" }
-            } catch { note = "download failed (\(error))" }
-            if html == nil { html = cache.data("apple-security-releases.html") }
+        switch await cache.fetch("apple-security-releases.html", from: url, maxAge: 12 * 3600,
+                                 offline: offline, headers: ["Accept-Language": "en-US"]) {
+        case .fresh: html = cache.data("apple-security-releases.html")
+        case .unchanged: html = cache.data("apple-security-releases.html"); note = "unchanged"
+        case .downloaded(let d):
+            // Only replace a working copy when the new page still parses as the index.
+            if parse(String(decoding: d, as: UTF8.self)).filter({ $0.product == "macOS" }).count >= 5 {
+                cache.store("apple-security-releases.html", d); html = d; note = "downloaded"
+            } else { note = "page format not recognized" }
+        case .failed(let why): note = "download failed (\(why))"
         }
+        if html == nil { html = cache.data("apple-security-releases.html") }
         let rel = html.map { parse(String(decoding: $0, as: UTF8.self)) } ?? []
         let state: SourceStatus.State = rel.isEmpty ? .failed : (note == "cached" || note == "downloaded" ? .ok : .warning)
         return (rel, SourceStatus(name: "Apple security releases", state: state, detail: rel.isEmpty ? "index unavailable (\(note))" : "\(rel.count) releases (\(note))", count: rel.count, updated: FS.mtime(cache.url("apple-security-releases.html").path)))

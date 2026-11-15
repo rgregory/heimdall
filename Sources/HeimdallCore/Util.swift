@@ -179,14 +179,18 @@ public enum HTTP {
     public static let defaultMaxBytes = 32 * 1024 * 1024
 
     public static func get(_ url: String, headers: [String: String] = [:], maxBytes: Int = defaultMaxBytes) async throws -> Data {
+        try await send(url, method: "GET", body: nil, headers: headers, maxBytes: maxBytes).0
+    }
+    /// Body plus the response, so conditional requests can read ETag / Last-Modified back.
+    public static func getWithResponse(_ url: String, headers: [String: String] = [:], maxBytes: Int = defaultMaxBytes) async throws -> (Data, HTTPURLResponse?) {
         try await send(url, method: "GET", body: nil, headers: headers, maxBytes: maxBytes)
     }
     public static func postJSON(_ url: String, _ body: Data) async throws -> Data {
-        try await send(url, method: "POST", body: body, headers: ["Content-Type": "application/json"])
+        try await send(url, method: "POST", body: body, headers: ["Content-Type": "application/json"]).0
     }
 
     static func send(_ url: String, method: String, body: Data?, headers: [String: String],
-                     maxBytes: Int = defaultMaxBytes, configuration: URLSessionConfiguration? = nil) async throws -> Data {
+                     maxBytes: Int = defaultMaxBytes, configuration: URLSessionConfiguration? = nil) async throws -> (Data, HTTPURLResponse?) {
         guard let u = URL(string: url), ["https", "http"].contains(u.scheme?.lowercased() ?? ""), maxBytes > 0 else {
             throw HTTPError(status: 0, url: url)
         }
@@ -197,6 +201,10 @@ public enum HTTP {
         let c = configuration ?? URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 60
         c.timeoutIntervalForResource = 300
+        // Revalidation is ours to do (DiskCache.fetch): URLSession's own cache would answer
+        // conditional requests itself and we would never see the 304.
+        c.urlCache = nil
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
         c.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
         let receiver = BoundedDownload(maxBytes: maxBytes)
         let session = URLSession(configuration: c, delegate: receiver, delegateQueue: nil)
@@ -214,12 +222,14 @@ private final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecke
     let maxBytes: Int
     var data = Data()
     var failure: Error?
-    var continuation: CheckedContinuation<Data, Error>?
+    var response: HTTPURLResponse?
+    var continuation: CheckedContinuation<(Data, HTTPURLResponse?), Error>?
 
     init(maxBytes: Int) { self.maxBytes = maxBytes }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        self.response = response as? HTTPURLResponse
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if !(200..<300).contains(status) {
             failure = HTTPError(status: status, url: response.url?.absoluteString ?? "")
@@ -242,7 +252,7 @@ private final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecke
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = failure ?? error { continuation?.resume(throwing: error) }
-        else { continuation?.resume(returning: data) }
+        else { continuation?.resume(returning: (data, response)) }
         continuation = nil
     }
 }
@@ -276,6 +286,114 @@ public struct DiskCache: Sendable {
     }
     public func put<T: Encodable>(_ key: String, _ value: T) {
         if let d = try? JSONCoding.encoder.encode(value) { store(key, d) }
+    }
+
+    public func has(_ key: String) -> Bool { FS.exists(url(key).path) }
+    /// Restart the age clock without rewriting the entry — what a 304 means.
+    public func touch(_ key: String) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url(key).path)
+    }
+
+    struct Validators: Codable, Sendable { var etag: String?; var modified: String? }
+
+    /// Kept in a sidecar next to the entry so the entry itself stays the raw bytes.
+    static let validatorSuffix = "hv"
+    func validatorURL(_ key: String) -> URL { url(key).appendingPathExtension(Self.validatorSuffix) }
+    func validators(_ key: String) -> Validators? {
+        (try? Data(contentsOf: validatorURL(key))).flatMap { try? JSONCoding.decoder.decode(Validators.self, from: $0) }
+    }
+    func setValidators(_ key: String, _ r: HTTPURLResponse?) {
+        let etag = r?.value(forHTTPHeaderField: "ETag")
+        let modified = r?.value(forHTTPHeaderField: "Last-Modified")
+        guard etag != nil || modified != nil else { try? FileManager.default.removeItem(at: validatorURL(key)); return }
+        if let d = try? JSONCoding.encoder.encode(Validators(etag: etag, modified: modified)) {
+            try? d.write(to: validatorURL(key), options: .atomic)
+        }
+    }
+
+    /// What a conditional fetch found. `fetch` never writes the entry itself — the caller decides
+    /// whether `key` holds the raw body or something parsed out of it — but it does record the
+    /// validators and restart the clock on a 304.
+    public enum Fetch {
+        case fresh              // the stored entry is younger than maxAge; use it as-is
+        case unchanged          // the server confirmed it with a 304; the stored entry is current
+        case downloaded(Data)   // a new body
+        case failed(String)     // nothing came back; the stored entry, if any, is stale
+    }
+
+    /// Reuse the stored entry while it's younger than `maxAge`, then revalidate with
+    /// ETag / Last-Modified — a 304 is a few hundred bytes instead of the whole feed.
+    public func fetch(_ key: String, from url: String, maxAge: TimeInterval, offline: Bool,
+                      headers: [String: String] = [:], maxBytes: Int = HTTP.defaultMaxBytes) async -> Fetch {
+        if offline { return has(key) ? .fresh : .failed("offline and not cached") }
+        // By mtime, not by reading: the caller reads the entry itself when this says .fresh.
+        if let a = age(key), a <= maxAge { return .fresh }
+        var h = headers
+        if has(key), let v = validators(key) {
+            if let e = v.etag { h["If-None-Match"] = e }
+            if let m = v.modified { h["If-Modified-Since"] = m }
+        }
+        do {
+            let (body, response) = try await HTTP.getWithResponse(url, headers: h, maxBytes: maxBytes)
+            setValidators(key, response)
+            return .downloaded(body)
+        } catch let e as HTTPError where e.status == 304 {
+            touch(key)
+            return .unchanged
+        } catch {
+            return .failed("\(error)")
+        }
+    }
+}
+
+// MARK: - Cache maintenance
+
+/// The per-CVE and per-package caches add a small file per lookup and never remove one, so the
+/// cache grows for as long as Heimdall is used. Everything in it is re-downloadable, so pruning
+/// is always safe: drop entries past `maxAge`, then the oldest until the total is under `maxBytes`.
+public enum CacheMaintenance {
+    public static let defaultMaxAge: TimeInterval = 30 * 86400
+    public static let defaultMaxBytes = 256 * 1024 * 1024
+
+    @discardableResult
+    public static func sweep(maxAge: TimeInterval = defaultMaxAge, maxBytes: Int = defaultMaxBytes) -> (removed: Int, freed: Int) {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        guard let walk = fm.enumerator(at: Paths.cache, includingPropertiesForKeys: keys) else { return (0, 0) }
+
+        var entries: [(url: URL, date: Date, size: Int)] = []
+        var sidecars: [URL] = []
+        for case let u as URL in walk {
+            guard let v = try? u.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
+            if u.pathExtension == DiskCache.validatorSuffix { sidecars.append(u); continue }
+            entries.append((u, v.contentModificationDate ?? .distantPast, v.fileSize ?? 0))
+        }
+
+        var removed = 0, freed = 0
+        /// A sidecar is worthless without its entry, so the two go together.
+        func drop(_ e: (url: URL, date: Date, size: Int)) -> Bool {
+            do { try fm.removeItem(at: e.url) } catch { return false }
+            try? fm.removeItem(at: e.url.appendingPathExtension(DiskCache.validatorSuffix))
+            removed += 1; freed += e.size
+            return true
+        }
+
+        let cutoff = Date().addingTimeInterval(-maxAge)
+        var kept: [(url: URL, date: Date, size: Int)] = []
+        for e in entries {
+            if e.date < cutoff, drop(e) { continue }
+            kept.append(e)
+        }
+
+        var total = kept.reduce(0) { $0 + $1.size }
+        for e in kept.sorted(by: { $0.date < $1.date }) {
+            guard total > maxBytes else { break }
+            if drop(e) { total -= e.size }
+        }
+
+        // Sidecars whose entry is gone (pruned earlier, or cleared by hand).
+        for u in sidecars where !FS.exists(u.deletingPathExtension().path) { try? fm.removeItem(at: u) }
+        return (removed, freed)
     }
 }
 

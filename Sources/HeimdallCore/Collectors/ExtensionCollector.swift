@@ -78,11 +78,13 @@ public enum MaliciousExtensions {
 
     public static func load(offline: Bool) async -> (Set<String>, SourceStatus) {
         let cache = DiskCache("feeds")
-        var data = cache.data("malicious-extensions.csv", maxAge: offline ? nil : 86400)
-        var note = "cached"
-        if data == nil && !offline {
-            do { let d = try await HTTP.get(url); cache.store("malicious-extensions.csv", d); data = d; note = "downloaded" }
-            catch { data = cache.data("malicious-extensions.csv"); note = "download failed (\(error))" }
+        var data: Data?
+        var note: String
+        switch await cache.fetch("malicious-extensions.csv", from: url, maxAge: 86400, offline: offline) {
+        case .fresh: data = cache.data("malicious-extensions.csv"); note = "cached"
+        case .unchanged: data = cache.data("malicious-extensions.csv"); note = "unchanged"
+        case .downloaded(let d): cache.store("malicious-extensions.csv", d); data = d; note = "downloaded"
+        case .failed(let why): data = cache.data("malicious-extensions.csv"); note = "download failed (\(why))"
         }
         let text = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
         let ids = Set(text.allMatches(#"\b[a-p]{32}\b"#).map { $0[0] })

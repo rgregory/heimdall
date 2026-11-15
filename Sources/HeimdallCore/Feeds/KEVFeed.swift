@@ -15,11 +15,15 @@ public struct KEVCatalog: Sendable {
 
     public static func load(offline: Bool) async -> (KEVCatalog, SourceStatus) {
         let cache = DiskCache("feeds")
-        var data = cache.data("kev.json", maxAge: offline ? nil : 12 * 3600)
-        var note = "cached"
-        if data == nil && !offline {
-            do { data = try await HTTP.get(url); cache.store("kev.json", data!); note = "downloaded" }
-            catch { data = cache.data("kev.json"); note = "download failed (\(error)); using cached copy" }
+        var data: Data?
+        var note: String
+        switch await cache.fetch("kev.json", from: url, maxAge: 12 * 3600, offline: offline) {
+        case .fresh: data = cache.data("kev.json"); note = "cached"
+        case .unchanged: data = cache.data("kev.json"); note = "unchanged"
+        case .downloaded(let d): cache.store("kev.json", d); data = d; note = "downloaded"
+        case .failed(let why):
+            data = cache.data("kev.json")
+            note = "download failed (\(why))" + (data == nil ? "" : "; using cached copy")
         }
         guard let data, let cat = parse(data) else {
             return (KEVCatalog(), SourceStatus(name: "CISA KEV", state: .failed, detail: "catalog unavailable — exploited flags will be missing"))

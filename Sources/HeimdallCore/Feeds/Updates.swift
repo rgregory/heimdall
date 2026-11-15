@@ -12,8 +12,12 @@ public enum UpdateChecks {
         let feeds = apps.filter { packages[$0].feedURL != nil }.prefix(80).map { ($0, packages[$0].feedURL!) }
         let sparkle: [(Int, String?)] = await concurrentMap(Array(feeds), width: 8) { item in
             let key = "sparkle-" + stableHash(item.1) + ".xml"
-            var d = cache.data(key, maxAge: offline ? nil : 86400)
-            if d == nil && !offline { d = try? await HTTP.get(item.1, maxBytes: 2 * 1024 * 1024); if let d { cache.store(key, d) } }
+            var d: Data?
+            if case .downloaded(let body) = await cache.fetch(key, from: item.1, maxAge: 86400, offline: offline, maxBytes: 2 * 1024 * 1024) {
+                cache.store(key, body); d = body
+            } else {
+                d = cache.data(key)
+            }
             return (item.0, d.flatMap { latestInAppcast(String(decoding: $0, as: UTF8.self)) })
         }
         for (i, v) in sparkle { if let v, set(&packages[i], v, "Sparkle feed") { bySparkle += 1 } }
@@ -74,9 +78,13 @@ public enum UpdateChecks {
     /// "Firefox.app" → "144.0.2", from formulae.brew.sh (reduced and cached for a day).
     static func loadCaskIndex(offline: Bool) async -> [String: String] {
         let cache = DiskCache("updates")
-        if let c = cache.get("cask-index.json", [String: String].self, maxAge: offline ? nil : 86400) { return c }
-        guard !offline, let d = try? await HTTP.get("https://formulae.brew.sh/api/cask.json", maxBytes: 64 * 1024 * 1024),
-              let arr = jsonObject(d) as? [[String: Any]] else { return cache.get("cask-index.json", [String: String].self) ?? [:] }
+        // The entry holds the reduced map, not the 60 MB source: revalidating against the
+        // source's ETag lets a 304 confirm the map we already built.
+        let fetched = await cache.fetch("cask-index.json", from: "https://formulae.brew.sh/api/cask.json",
+                                        maxAge: 86400, offline: offline, maxBytes: 64 * 1024 * 1024)
+        guard case .downloaded(let d) = fetched, let arr = jsonObject(d) as? [[String: Any]] else {
+            return cache.get("cask-index.json", [String: String].self) ?? [:]
+        }
         var map: [String: String] = [:]
         for c in arr {
             guard let raw = c["version"] as? String, raw != "latest" else { continue }
