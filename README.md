@@ -78,12 +78,12 @@ NVD_API_KEY=… build/heimdall-scan --no-apps --csv
 Sources/HeimdallCore/      collectors, feeds (KEV, OSV, NVD, EPSS, Apple), matching, report store
 Sources/Heimdall/          SwiftUI app
 Sources/heimdall-scan/     command-line scanner
-Tests/HeimdallCoreTests/   version ordering, CVSS, NVD applicability, parsers
+Tests/HeimdallCoreTests/   version ordering, CVSS, NVD applicability, parsers, HTTP transport
 ```
 
 Data lives in `~/Library/Application Support/Heimdall` (reports, first-sighting history, [CPE overrides](docs/OVERVIEW.md#teaching-it-about-more-apps)) and `~/Library/Caches/Heimdall` (feeds; safe to delete).
 
-Every feed is cached on disk with its own lifetime — an hour for news, 12 hours for KEV and the vendor indexes, a day for NVD searches and update checks, a week for individual CVE records, 30 days for per-release advisory pages. Once an entry expires it is revalidated with `ETag` / `If-Modified-Since` rather than re-downloaded, so an unchanged KEV catalog costs a 304 instead of several MB. Entries older than 30 days are pruned at launch, and the cache is held under 256 MB oldest-first. The app shows the last report immediately at launch and only rescans when it's older than the interval in Settings → Display.
+Every feed is cached on disk with its own lifetime — an hour for news, 12 hours for KEV and the vendor indexes, a day for NVD searches and update checks, a week for individual CVE records, 30 days for per-release advisory pages. Once an entry expires it is revalidated with `ETag` / `If-Modified-Since` rather than re-downloaded, so an unchanged KEV catalog costs a 304 instead of several MB. Connections are pooled across a scan, so the hundreds of CVE lookups behind a first scan don't each pay for a new TLS handshake. Entries older than 30 days are pruned at launch, and the cache is held under 256 MB oldest-first. The app shows the last report immediately at launch and only rescans when it's older than the interval in Settings → Display.
 
 ## Limits
 

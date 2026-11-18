@@ -47,9 +47,9 @@ Matches come from published ranges of affected versions. The exception is anythi
 - **npm, PyPI, crates.io:** the name and version of a package that already has an advisory.
 - **CISA KEV catalog and Apple's security-release index:** plain downloads.
 
-No paths, file contents or host names are sent. Offline mode (in Settings) uses cached data only and skips `brew vulns`.
+No paths, file contents, host names or cookies are sent. Cookie and credential storage are both refused, so nothing a server sets comes back on a later request, and an API key travels only in the header of the request that needs it — `apiKey` for NVD, a bearer token for VulnCheck. Offline mode (in Settings) uses cached data only and skips `brew vulns`.
 
-External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; Malformed or incomplete OSV and NVD responses are rejected instead of being cached as clean results. If a refresh fails, the previous cache is kept and Sources reports reduced coverage.
+External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; Malformed or incomplete OSV and NVD responses are rejected instead of being cached as clean results. If a refresh fails, the previous cache is kept and Sources reports reduced coverage. Every request goes through one connection pool, so repeated lookups to the same host reuse an open connection and its TLS session rather than handshaking again, up to eight connections per host.
 
 Copyable fix commands validate package names and fixed versions and quote their arguments. CSV exports neutralize spreadsheet formula prefixes in external text.
 
