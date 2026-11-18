@@ -24,6 +24,7 @@ Apple's own bundles are skipped there — they move with macOS — except Safari
 Questions about this Mac, asked after the inventory is read and folded into the ranking:
 
 - **Is it reachable?** `ps -axo pid=,comm=` for what's running, `lsof -nP -iTCP -sTCP:LISTEN` for what's listening (this account only, without root), the LaunchAgent and LaunchDaemon plists a normal user can read, and `launchctl list` for what launchd has loaded. A package is matched to a process by path — an app bundle prefix, a Homebrew keg or the `bin` symlink Homebrew links it to. A library inside an interpreter can't be seen running, so it is left unanswered rather than called idle, and a browser extension follows its browser. Nothing is launched and no process is inspected.
+- **How long has it been open?** First sightings are kept in `history.json`, keyed by package and advisory without the version, so an advisory that survives a patch release is the same open problem rather than a new one. A finding over a week old is pushed up, and the row says since when. The same file keeps one small row per scan — counts only — for the trend.
 
 Vendor advisories give exact fixed versions, often days before NVD does. Heimdall reads Apple's per-release security notes for the macOS and Safari releases you're missing, Chrome Releases (stable channel), Mozilla Foundation Security Advisories (Firefox, ESR, Thunderbird), and Microsoft's monthly MSRC releases (Office for Mac, Teams, Edge and VS Code, matched by build number).
 

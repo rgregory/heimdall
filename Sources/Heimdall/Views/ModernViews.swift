@@ -408,6 +408,7 @@ struct ModernFindingRow: View {
                     if f.awaitingRelease == true { RowIcon(symbol: "clock", tint: .secondary, help: "No fixed release yet") }
                     else if p.outdated { RowIcon(symbol: "arrow.down.circle", tint: .blue, help: p.latest.map { "Update available: \($0)" } ?? "Update available") }
                 }
+                if let d = f.ageDays, d >= 7 { ThingsTag(text: "\(d)d", tint: .secondary) }
                 if f.kevCount > 0 { ThingsTag(text: f.ransomware ? "exploited · ransomware" : "exploited", tint: .red, filled: true) }
                 else if f.topSeverity != .unknown { ThingsTag(text: f.topSeverity.title.lowercased(), tint: f.topSeverity.tint) }
                 Text(f.vulns.count.formatted()).font(.system(size: 12)).foregroundStyle(.secondary).frame(minWidth: 22, alignment: .trailing)
@@ -434,6 +435,10 @@ struct ModernFindingRow: View {
                     if let e = p.exposure {
                         Text("On this Mac: " + e.summary + (e.notes.isEmpty ? "" : " — " + e.notes.joined(separator: "; ")))
                             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3).truncationMode(.middle)
+                    }
+                    if let first = f.firstSeen, let d = f.ageDays {
+                        Text(d == 0 ? "First seen in today's scan." : "Open here for \(plural(d, "day")), since \(first.formatted(date: .abbreviated, time: .omitted)).")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     FixSteps(steps: f.fixSteps ?? [f.fixHint])
                     VStack(spacing: 0) {

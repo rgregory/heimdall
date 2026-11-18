@@ -208,6 +208,7 @@ public struct Scanner: Sendable {
         func interim() {
             guard let partial else { return }
             var r = Self.assemble(packages: packages, vulns: vulns, posture: posture, sources: sources, kev: kev)
+            History.stamp(&r)
             r.duration = Date().timeIntervalSince(started)
             r.partial = true
             partial(r)
@@ -324,6 +325,7 @@ public struct Scanner: Sendable {
             report.sources.append(st)
         }
         progress("Done", 1)
+        History.record(&report)
         report.duration = Date().timeIntervalSince(started)
         return report
     }

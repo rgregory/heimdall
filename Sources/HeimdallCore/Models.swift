@@ -234,8 +234,14 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
     public var awaitingRelease: Bool? = nil
     /// "How to fix it": ordered steps, commands or plain sentences.
     public var fixSteps: [String]? = nil
+    /// The first scan that saw this, from the history file. nil on a Mac with no history yet.
+    public var firstSeen: Date? = nil
 
     public var id: String { package.id }
+    /// Whole days this has been open here. Rounded down, so "today" reads as 0 rather than 1.
+    public var ageDays: Int? {
+        firstSeen.map { max(0, Int(Date().timeIntervalSince($0) / 86400)) }
+    }
     public var kevCount: Int { vulns.filter(\.isKEV).count }
     public var topSeverity: Severity { vulns.map(\.severity).max() ?? .unknown }
     /// What the advisories say, on their own.
@@ -278,6 +284,12 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
         if package.parent != nil {
             score -= 60
             factors.append("bundled inside \(package.parent ?? "another program")")
+        }
+        // How long it has been here. An advisory that appeared this morning and one that has been
+        // open for a month are the same advisory and not the same problem.
+        if let days = ageDays, days >= 7 {
+            score += min(80, Double(days) * 2)
+            factors.append("open for \(days) days")
         }
         return Risk(score: score, factors: factors, blocked: blocked)
     }

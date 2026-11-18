@@ -201,3 +201,27 @@ final class ExposureTests: XCTestCase {
                                                   processes: [], ports: [:], agents: [], loaded: [])?.running, false)
     }
 }
+
+final class HistoryTests: XCTestCase {
+    func testFirstSeenIsTheOldestSightingAcrossTheAdvisories() {
+        var p = Package(ecosystem: .npm, name: "left-pad", version: "1.0.0")
+        p.parent = nil
+        var a = Vulnerability(id: "CVE-2026-1"), b = Vulnerability(id: "CVE-2026-2")
+        a.severity = .high; b.severity = .low
+        var r = ScanReport(generated: Date(), posture: SystemPosture(), packages: [p],
+                           findings: [Finding(package: p, vulns: [a, b])], sources: [])
+        let old = Date().addingTimeInterval(-10 * 86400)
+        History.apply(&r, [History.key(p, a): Date().addingTimeInterval(-86400), History.key(p, b): old])
+        XCTAssertEqual(r.findings[0].firstSeen, old)
+        XCTAssertEqual(r.findings[0].ageDays, 10)
+    }
+
+    func testKeyIgnoresTheVersion() {
+        var one = Package(ecosystem: .pypi, name: "requests", version: "2.25.0")
+        var two = one; two.version = "2.26.0"
+        let v = Vulnerability(id: "CVE-2026-9")
+        XCTAssertEqual(History.key(one, v), History.key(two, v), "a patch release that doesn't fix it is the same open problem")
+        one.parent = "pipx"
+        XCTAssertNotEqual(History.key(one, v), History.key(two, v))
+    }
+}

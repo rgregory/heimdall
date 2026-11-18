@@ -48,7 +48,7 @@ public enum ReportExport {
             return s.unicodeScalars.contains(where: { CharacterSet(charactersIn: ",\"\r\n").contains($0) })
                 ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
         }
-        var lines = ["ecosystem,package,version,parent,location,vulnerability,aliases,severity,cvss,epss,kev,kev_added,ransomware,fixed,confidence,source,running,listening,autostart,fix,summary"]
+        var lines = ["ecosystem,package,version,parent,location,vulnerability,aliases,severity,cvss,epss,kev,kev_added,ransomware,fixed,confidence,source,running,listening,autostart,first_seen,age_days,fix,summary"]
         for (f, v) in r.allVulns.sorted(by: { (a: (Finding, Vulnerability), b: (Finding, Vulnerability)) in a.1.priority > b.1.priority }) {
             let p = f.package
             let others = ([v.id] + v.aliases).filter { $0 != v.headlineID }.joined(separator: " ")
@@ -60,6 +60,7 @@ public enum ReportExport {
             let e = p.exposure
             row += [e.map { $0.running ? "yes" : "no" } ?? "", e.map { $0.ports.map(String.init).joined(separator: " ") } ?? "",
                     e.map { $0.autostart ? "yes" : "no" } ?? ""]
+            row += [f.firstSeen.map { ISO8601DateFormatter().string(from: $0) } ?? "", f.ageDays.map(String.init) ?? ""]
             row += [f.fixHint, v.summary]
             lines.append(row.map(q).joined(separator: ","))
         }

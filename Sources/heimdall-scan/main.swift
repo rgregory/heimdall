@@ -47,6 +47,7 @@ for f in report.findings.prefix(15) {
     let worst = f.topSeverity.rawValue
     var here: [String] = []
     if let e = f.package.exposure, e.any { here.append(e.summary) }
+    if let d = f.ageDays, d >= 7 { here.append("open \(d)d") }
     let note = here.isEmpty ? "" : " · " + here.joined(separator: ", ")
     print("  [\(worst)] \(f.package.ecosystem.rawValue) \(f.package.displayName) \(f.package.version) — \(f.vulns.count) advisories\(note) → \(f.fixHint)")
 }

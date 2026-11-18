@@ -27,7 +27,7 @@ An app's own version number says nothing about the engine inside it, so the fram
 
 Each advisory is then checked for signs of exploitation (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC) and for public exploit code (Exploit-DB, Metasploit, nuclei). FIRST EPSS gives the odds of exploitation, and cvelistV5 or CISA Vulnrichment fill in missing scores. Sparkle feeds, the App Store and Homebrew's cask index say when a newer version is out, and 13 news feeds are matched against what's installed. The app icon turns red while anything exploited is installed.
 
-What this Mac is doing shapes the order too: `ps`, `lsof` and launchd say whether each vulnerable thing is running, started at login or listening on a socket.
+Two things about this Mac, rather than about the advisory, then shape what you see. `ps`, `lsof` and launchd say whether each vulnerable thing is running, started at login or listening on a socket. A history file says how long each finding has been open here.
 
 [docs/OVERVIEW.md](docs/OVERVIEW.md) covers what gets sent where, download size limits, and adding your own app mappings.
 
@@ -49,7 +49,7 @@ The app is signed ad hoc, so the first launch needs a right-click → **Open**.
 
 - **⌘R** scans. Without an NVD API key the first scan takes a few minutes, because NVD only allows 5 requests every 30 seconds. Answers are cached for a day. You can add a free key in Settings → Matching; it's stored in your login keychain.
 - **Brief:** **Fix First** is exploited *and* fixable. **Blocked** is exploited with nothing to install yet — the owner hasn't shipped a build, so it's on the list but not on tonight's list. **Worth Updating** is everything else high or critical. Below that are the macOS and Safari status, counts by severity and section, and what changed since the last scan.
-- **Ranking:** rows are ordered by risk, not by CVSS alone — known exploitation, ransomware use, public exploit code and EPSS push a finding up, and so do a socket it's listening on, a process that's running right now, and a launchd job that starts it. Having nothing to install pushes it down, as does being a dependency bundled inside something else rather than a program you run, or not running at all when the scan went past. Open any row and it tells you which of those applied and what it saw running.
+- **Ranking:** rows are ordered by risk, not by CVSS alone — known exploitation, ransomware use, public exploit code and EPSS push a finding up, and so do a socket it's listening on, a process that's running right now, a launchd job that starts it, and weeks of sitting open. Having nothing to install pushes it down, as does being a dependency bundled inside something else rather than a program you run, or not running at all when the scan went past. Open any row and it tells you which of those applied, what it saw running, and how long the finding has been here.
 - **Exploited:** a timeline of CISA KEV listings, grouped by month, with same-day listings for one product folded into a single line. A red dot means a vulnerable version is installed now; a green ring means the product is installed but no vulnerable version was found. You can switch between This Mac and Everything, and between 30 days, 90 days and 12 months.
 - **News:** the last 30 days from SANS ISC, The Hacker News, Krebs, Sophos, Securelist, WeLiveSecurity, Schneier, Troy Hunt, Graham Cluley, Darknet Diaries and USOM (TR-CERT). Stories are highlighted red when they name a CVE that's open on this Mac and pink when they name software you have installed. Darknet Diaries episodes are listed but never matched. Findings in the news get a newspaper icon, and the Brief shows this week's stories about your Mac. You can edit the feed list in Settings → News.
 - **Section pages** (macOS, Apps, Homebrew, Languages): one row per vulnerable package. Click a row to see how to fix it and which advisories apply, then click an advisory for the full details. Languages groups packages under the tool that bundles them.
@@ -78,7 +78,7 @@ Sources/heimdall-scan/     command-line scanner
 Tests/HeimdallCoreTests/   version ordering, CVSS, NVD applicability, parsers
 ```
 
-Data lives in `~/Library/Application Support/Heimdall` (reports, [CPE overrides](docs/OVERVIEW.md#teaching-it-about-more-apps)) and `~/Library/Caches/Heimdall` (feeds; safe to delete).
+Data lives in `~/Library/Application Support/Heimdall` (reports, first-sighting history, [CPE overrides](docs/OVERVIEW.md#teaching-it-about-more-apps)) and `~/Library/Caches/Heimdall` (feeds; safe to delete).
 
 Every feed is cached on disk with its own lifetime — an hour for news, 12 hours for KEV and the vendor indexes, a day for NVD searches and update checks, a week for individual CVE records, 30 days for per-release advisory pages. Once an entry expires it is revalidated with `ETag` / `If-Modified-Since` rather than re-downloaded, so an unchanged KEV catalog costs a 304 instead of several MB. Entries older than 30 days are pruned at launch, and the cache is held under 256 MB oldest-first. The app shows the last report immediately at launch and only rescans when it's older than the interval in Settings → Display.
 
