@@ -45,7 +45,10 @@ if !report.kevFindings.isEmpty {
 print("\nTop findings")
 for f in report.findings.prefix(15) {
     let worst = f.topSeverity.rawValue
-    print("  [\(worst)] \(f.package.ecosystem.rawValue) \(f.package.displayName) \(f.package.version) — \(f.vulns.count) advisories → \(f.fixHint)")
+    var here: [String] = []
+    if let e = f.package.exposure, e.any { here.append(e.summary) }
+    let note = here.isEmpty ? "" : " · " + here.joined(separator: ", ")
+    print("  [\(worst)] \(f.package.ecosystem.rawValue) \(f.package.displayName) \(f.package.version) — \(f.vulns.count) advisories\(note) → \(f.fixHint)")
 }
 print("\nSources")
 for s in report.sources { print("  \(s.state.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)) \(s.name): \(s.detail)") }

@@ -25,6 +25,8 @@ public struct ScanOptions: Codable, Sendable, Equatable {
     public var extensions = true
     /// Electron, Chromium, Sparkle, Python and Java runtimes inside application bundles.
     public var bundled = true
+    /// Whether each vulnerable thing is running, started by launchd or listening on a socket.
+    public var exposure = true
     /// Security news feeds, matched to what's installed.
     public var news = true
     public var newsFeeds: [NewsFeed] = NewsFeed.defaults
@@ -49,6 +51,7 @@ public struct ScanOptions: Codable, Sendable, Equatable {
         updateChecks = try c.decodeIfPresent(Bool.self, forKey: .updateChecks) ?? d.updateChecks
         extensions = try c.decodeIfPresent(Bool.self, forKey: .extensions) ?? d.extensions
         bundled = try c.decodeIfPresent(Bool.self, forKey: .bundled) ?? d.bundled
+        exposure = try c.decodeIfPresent(Bool.self, forKey: .exposure) ?? d.exposure
         news = try c.decodeIfPresent(Bool.self, forKey: .news) ?? d.news
         newsFeeds = (try c.decodeIfPresent([NewsFeed].self, forKey: .newsFeeds) ?? d.newsFeeds).filter { !NewsFeed.retired.contains($0.url) }
     }
@@ -106,6 +109,10 @@ public struct Scanner: Sendable {
         annotateCasks(&packages)
         annotateGoOwners(&packages)
         if let s = packages.first(where: { $0.bundleID == "com.apple.Safari" }) { posture.safariVersion = s.version }
+        if options.exposure {
+            progress("Checking what is running and what is listening", 0.14)
+            sources.append(await ExposureCollector.annotate(&packages))
+        }
 
         // ---- Feeds
         progress("Loading the CISA KEV catalog", 0.16)

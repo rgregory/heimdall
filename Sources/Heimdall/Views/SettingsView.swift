@@ -93,6 +93,7 @@ struct MatchingSettings: View {
                 SecureField("VulnCheck API token (optional)", text: $model.vulnCheckToken).onSubmit { model.persistSecrets() }
                 Toggle("Check for newer app versions (Sparkle, App Store, Homebrew casks)", isOn: $model.options.updateChecks)
                 Toggle("Fetch EPSS exploit-probability scores", isOn: $model.options.epss)
+                Toggle("Rank by what is running, started by launchd or listening", isOn: $model.options.exposure)
             } header: { Text("More sources") } footer: {
                 Text("A free VulnCheck token (vulncheck.com) adds their exploited list. Your ~/nuclei-templates checkout is used when present.").foregroundStyle(.secondary)
             }

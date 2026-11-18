@@ -397,6 +397,14 @@ struct ModernFindingRow: View {
                 HStack(spacing: 6) {
                     if f.vulns.contains(where: \.hasPublicExploit) { RowIcon(symbol: "hammer.fill", tint: .purple, help: "Public exploit code exists") }
                     if model.newsPackageIDs.contains(p.id) { RowIcon(symbol: "newspaper.fill", tint: .pink, help: "In the news this week") }
+                    if let e = p.exposure, e.listening {
+                        RowIcon(symbol: "antenna.radiowaves.left.and.right", tint: .orange,
+                                help: "Listening on " + e.ports.map(String.init).joined(separator: ", "))
+                    } else if p.exposure?.running == true {
+                        RowIcon(symbol: "play.circle", tint: .orange, help: "Running right now")
+                    } else if p.exposure?.autostart == true {
+                        RowIcon(symbol: "power", tint: .orange, help: "Started by launchd")
+                    }
                     if f.awaitingRelease == true { RowIcon(symbol: "clock", tint: .secondary, help: "No fixed release yet") }
                     else if p.outdated { RowIcon(symbol: "arrow.down.circle", tint: .blue, help: p.latest.map { "Update available: \($0)" } ?? "Update available") }
                 }
@@ -423,6 +431,10 @@ struct ModernFindingRow: View {
                     }
                     Text([p.ecosystem.title, p.source, p.location].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+                    if let e = p.exposure {
+                        Text("On this Mac: " + e.summary + (e.notes.isEmpty ? "" : " — " + e.notes.joined(separator: "; ")))
+                            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3).truncationMode(.middle)
+                    }
                     FixSteps(steps: f.fixSteps ?? [f.fixHint])
                     VStack(spacing: 0) {
                         ForEach(f.vulns.prefix(all ? f.vulns.count : 8)) { v in ModernVulnRow(finding: f, vuln: v) }
@@ -535,6 +547,8 @@ struct InstalledRow: View {
             Text(p.displayName).font(.system(size: 13.5)).lineLimit(1)
             Text(p.version).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 8)
+            if let e = p.exposure, e.listening { ThingsTag(text: "listening " + e.ports.map(String.init).joined(separator: ","), tint: .orange) }
+            else if p.exposure?.running == true { ThingsTag(text: "running", tint: .orange) }
             if p.outdated { ThingsTag(text: p.latest.map { "update → \($0)" } ?? "update ready", tint: .blue) }
             ThingsTag(text: p.ecosystem.title)
         }

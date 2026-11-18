@@ -129,3 +129,75 @@ final class BundledRuntimeTests: XCTestCase {
         XCTAssertEqual(kid.bundleID, "org.electronjs.Electron")
     }
 }
+
+final class ExposureTests: XCTestCase {
+    func testParsesPs() {
+        let out = """
+          401 /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+         1234 /Applications/Visual Studio Code.app/Contents/MacOS/Electron
+         9999 ???
+        """
+        let procs = ExposureCollector.parseProcesses(out)
+        XCTAssertEqual(procs.count, 2, "a path that isn't a path is dropped")
+        XCTAssertEqual(procs[1].pid, 1234)
+        XCTAssertEqual(procs[1].path, "/Applications/Visual Studio Code.app/Contents/MacOS/Electron", "paths contain spaces")
+    }
+
+    func testParsesLsofFields() {
+        let out = "p501\nn127.0.0.1:5432\nn*:8080\np777\nn[::1]:3000\n"
+        let ports = ExposureCollector.parsePorts(out)
+        XCTAssertEqual(ports[501], [5432, 8080])
+        XCTAssertEqual(ports[777], [3000], "IPv6 addresses keep their port after the last colon")
+    }
+
+    func testParsesLaunchctlLabels() {
+        let out = "PID\tStatus\tLabel\n-\t0\tcom.example.agent\n42\t0\tcom.example.helper\n"
+        XCTAssertEqual(ExposureCollector.parseLabels(out), ["com.example.agent", "com.example.helper"])
+    }
+
+    func testOwnership() {
+        let app = Package(ecosystem: .app, name: "Demo", version: "1", location: "/Applications/Demo.app")
+        XCTAssertTrue(ExposureCollector.owns(app, "/Applications/Demo.app/Contents/MacOS/Demo"))
+        XCTAssertFalse(ExposureCollector.owns(app, "/Applications/Demo Helper.app/Contents/MacOS/x"))
+
+        // Homebrew runs its programs from <prefix>/bin, not from the keg.
+        let brew = Package(ecosystem: .homebrew, name: "nginx", version: "1.27.3", location: "/opt/homebrew/Cellar/nginx/1.27.3")
+        XCTAssertTrue(ExposureCollector.owns(brew, "/opt/homebrew/bin/nginx"))
+        XCTAssertTrue(ExposureCollector.owns(brew, "/opt/homebrew/Cellar/nginx/1.27.3/bin/nginx"))
+        XCTAssertFalse(ExposureCollector.owns(brew, "/opt/homebrew/bin/nginx-helper"))
+    }
+
+    func testListeningPackagePicksUpItsPort() {
+        let p = Package(ecosystem: .homebrew, name: "nginx", version: "1.27.3", location: "/opt/homebrew/Cellar/nginx/1.27.3")
+        let procs = [ExposureCollector.Proc(pid: 501, path: "/opt/homebrew/bin/nginx")]
+        let e = try! XCTUnwrap(ExposureCollector.exposure(p, paths: procs.map(\.path), processes: procs,
+                                                          ports: [501: [8080]], agents: [], loaded: []))
+        XCTAssertTrue(e.running)
+        XCTAssertEqual(e.ports, [8080])
+        XCTAssertTrue(e.summary.contains("listening on 8080"))
+    }
+
+    func testLaunchdAgentCountsAsAutostart() {
+        let p = Package(ecosystem: .app, name: "Demo", version: "1", location: "/Applications/Demo.app")
+        let e = try! XCTUnwrap(ExposureCollector.exposure(p, paths: [], processes: [], ports: [:],
+                                                          agents: [(program: "/Applications/Demo.app/Contents/MacOS/Agent", label: "com.example.demo")],
+                                                          loaded: []))
+        XCTAssertTrue(e.autostart)
+        XCTAssertFalse(e.running)
+    }
+
+    func testUnanswerableKindsStayUnanswered() {
+        // A library inside an interpreter cannot be seen running, and "idle" would be a lie.
+        let lib = Package(ecosystem: .pypi, name: "requests", version: "2.25.0", location: "/x/site-packages/requests")
+        XCTAssertNil(ExposureCollector.exposure(lib, paths: ["/opt/homebrew/bin/python3"], processes: [], ports: [:], agents: [], loaded: []))
+    }
+
+    func testExtensionFollowsItsBrowser() {
+        var ext = Package(ecosystem: .browserExtension, name: "Some Extension", version: "1.2")
+        ext.browser = "Chrome"
+        let running = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+        XCTAssertEqual(ExposureCollector.exposure(ext, paths: running, processes: [], ports: [:], agents: [], loaded: [])?.running, true)
+        XCTAssertEqual(ExposureCollector.exposure(ext, paths: ["/Applications/Firefox.app/Contents/MacOS/firefox"],
+                                                  processes: [], ports: [:], agents: [], loaded: [])?.running, false)
+    }
+}

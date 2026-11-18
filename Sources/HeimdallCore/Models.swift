@@ -56,6 +56,29 @@ public enum Desk: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Whether a vulnerable thing is actually reachable on this Mac: running now, started by
+/// launchd, or listening on a socket. Read from the account's own view of the machine, so an
+/// answer of "no" means "not while this scan was running" rather than "never".
+public struct Exposure: Codable, Hashable, Sendable {
+    public var running = false
+    public var autostart = false
+    public var ports: [Int] = []
+    /// How it was seen, for the detail view: the process path, the launchd label.
+    public var notes: [String] = []
+
+    public init() {}
+
+    public var listening: Bool { !ports.isEmpty }
+    public var any: Bool { running || autostart || listening }
+    public var summary: String {
+        var parts: [String] = []
+        if listening { parts.append("listening on " + ports.map(String.init).joined(separator: ", ")) }
+        if running { parts.append("running") }
+        if autostart { parts.append("started by launchd") }
+        return parts.isEmpty ? "not running when scanned" : parts.joined(separator: " · ")
+    }
+}
+
 public struct Package: Codable, Hashable, Identifiable, Sendable {
     public var ecosystem: Ecosystem
     public var name: String
@@ -91,6 +114,9 @@ public struct Package: Codable, Hashable, Identifiable, Sendable {
     /// A product that drops helper binaries outside an .app bundle — "/Library/Application
     /// Support/fuse-t/bin/go-nfsv4" belongs to fuse-t, which is what you actually update.
     public var ownerProduct: String? = nil
+    /// Whether this is reachable right now: running, started by launchd, listening. nil means the
+    /// question can't be answered for this kind of package (a library inside an interpreter).
+    public var exposure: Exposure? = nil
 
     public var id: String { "\(ecosystem.rawValue):\(parent.map { $0 + ">" } ?? "")\(name)@\(version)@\(location)" }
 
@@ -236,6 +262,17 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
             score += 150
             factors.append("fixable now")
         }
+        // Reachability. The same flaw in something listening on a socket and in something that
+        // hasn't run since it was installed are not the same evening's work.
+        if let e = package.exposure {
+            if e.listening {
+                score += 120
+                factors.append("listening on " + e.ports.map(String.init).joined(separator: ", "))
+            }
+            if e.running { score += 70; factors.append("running right now") }
+            if e.autostart { score += 40; factors.append("started by launchd") }
+            if !e.any { score -= 40; factors.append("not running when scanned") }
+        }
         // Something bundled inside another program: you don't invoke it, and the vulnerable code
         // may not even be reached. Still real, just not the first thing to spend an evening on.
         if package.parent != nil {
@@ -313,6 +350,8 @@ public struct ScanReport: Codable, Sendable {
     public var urgent: Bool { kevCount > 0 }
     public var outdatedPackages: [Package] { packages.filter { $0.outdated && $0.latest != nil } }
     public var kevFindings: [Finding] { findings.filter { $0.kevCount > 0 }.sorted { $0.risk.score > $1.risk.score } }
+    /// Findings on something running, started by launchd or listening right now.
+    public var reachableFindings: [Finding] { findings.filter { $0.package.exposure?.any == true }.sorted { $0.risk.score > $1.risk.score } }
     public var kevCount: Int { Set(allVulns.filter { $0.1.isKEV }.map { $0.0.id + $0.1.headlineID }).count }
     public func findings(in desk: Desk) -> [Finding] {
         findings.filter { $0.package.ecosystem.desk == desk }.sorted { $0.risk.score > $1.risk.score }
