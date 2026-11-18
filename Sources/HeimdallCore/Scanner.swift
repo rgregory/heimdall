@@ -562,7 +562,12 @@ public struct Scanner: Sendable {
     }
 
     static func isPackageName(_ value: String) -> Bool {
-        value.range(of: #"\A(?:[A-Za-z0-9][A-Za-z0-9._+-]*(?:/[A-Za-z0-9][A-Za-z0-9._+-]*)*|@[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)\z"#, options: .regularExpression) != nil
+        // A segment may carry one "@version" suffix, because that is how Homebrew names a
+        // versioned formula (openssl@1.1, python@3.9) — the very ones most likely to be past
+        // their end of life and in need of a command. npm's "@scope/name" is the other form.
+        let segment = "[A-Za-z0-9][A-Za-z0-9._+-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?"
+        let pattern = "\\A(?:\(segment)(?:/\(segment))*|@[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)\\z"
+        return value.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// Nothing to upgrade to: no advisory names a released version above what's installed, and
