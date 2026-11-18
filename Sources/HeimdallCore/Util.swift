@@ -178,6 +178,19 @@ public enum HTTP {
     // Large indexes opt into a larger finite allowance; ordinary JSON responses stay bounded.
     public static let defaultMaxBytes = 32 * 1024 * 1024
 
+    private static let sharedDelegate = SessionDelegate()
+    private static let sharedSession: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 60
+        c.timeoutIntervalForResource = 300
+        // Revalidation is ours to do (DiskCache.fetch): URLSession's own cache would answer
+        // conditional requests itself and we would never see the 304.
+        c.urlCache = nil
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
+        c.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
+        return URLSession(configuration: c, delegate: sharedDelegate, delegateQueue: nil)
+    }()
+
     public static func get(_ url: String, headers: [String: String] = [:], maxBytes: Int = defaultMaxBytes) async throws -> Data {
         try await send(url, method: "GET", body: nil, headers: headers, maxBytes: maxBytes).0
     }
@@ -198,21 +211,56 @@ public enum HTTP {
         req.httpMethod = method
         req.httpBody = body
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        let c = configuration ?? URLSessionConfiguration.ephemeral
-        c.timeoutIntervalForRequest = 60
-        c.timeoutIntervalForResource = 300
-        // Revalidation is ours to do (DiskCache.fetch): URLSession's own cache would answer
-        // conditional requests itself and we would never see the 304.
-        c.urlCache = nil
-        c.requestCachePolicy = .reloadIgnoringLocalCacheData
-        c.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
         let receiver = BoundedDownload(maxBytes: maxBytes)
-        let session = URLSession(configuration: c, delegate: receiver, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
+        if let configuration {
+            configuration.timeoutIntervalForRequest = 60
+            configuration.timeoutIntervalForResource = 300
+            configuration.urlCache = nil
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            configuration.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
+            let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
+            defer { session.invalidateAndCancel() }
+            return try await withCheckedThrowingContinuation { continuation in
+                receiver.continuation = continuation
+                session.dataTask(with: req).resume()
+            }
+        }
         return try await withCheckedThrowingContinuation { continuation in
             receiver.continuation = continuation
-            session.dataTask(with: req).resume()
+            let task = sharedSession.dataTask(with: req)
+            sharedDelegate.register(receiver, for: task.taskIdentifier)
+            task.resume()
         }
+    }
+}
+
+private final class SessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var receivers: [Int: BoundedDownload] = [:]
+
+    func register(_ receiver: BoundedDownload, for taskID: Int) {
+        lock.lock(); receivers[taskID] = receiver; lock.unlock()
+    }
+
+    private func receiver(for task: URLSessionTask, remove: Bool = false) -> BoundedDownload? {
+        lock.lock()
+        let r = remove ? receivers.removeValue(forKey: task.taskIdentifier) : receivers[task.taskIdentifier]
+        lock.unlock()
+        return r
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        receiver(for: dataTask)?.urlSession(session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
+            ?? completionHandler(.cancel)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        receiver(for: dataTask)?.urlSession(session, dataTask: dataTask, didReceive: chunk)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        receiver(for: task, remove: true)?.urlSession(session, task: task, didCompleteWithError: error)
     }
 }
 
