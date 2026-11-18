@@ -13,6 +13,7 @@ private final class ConcurrentHTTPServer: @unchecked Sendable {
     private var waiting: [(NWConnection, String)] = []
     private var requests = 0
     private var peakWaiting = 0
+    private var requestText: [String: String] = [:]
     private let batchSize: Int
 
     init(batchSize: Int) throws {
@@ -41,6 +42,8 @@ private final class ConcurrentHTTPServer: @unchecked Sendable {
     var port: UInt16? { listener.port?.rawValue }
     var concurrentRequests: Int { queue.sync { peakWaiting } }
     var requestCount: Int { queue.sync { requests } }
+    /// The raw request the server read for a path, so a test can assert on headers we sent.
+    func request(for path: String) -> String? { queue.sync { requestText[path] } }
 
     func stop() {
         queue.sync {
@@ -58,6 +61,7 @@ private final class ConcurrentHTTPServer: @unchecked Sendable {
             guard received.count <= 16_384 else { connection.cancel(); return }
             if let text = String(data: received, encoding: .utf8), text.contains("\r\n\r\n") {
                 let path = text.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                self.requestText[path] = text
                 self.requests += 1
                 if self.requests <= self.batchSize {
                     self.waiting.append((connection, path))
@@ -80,7 +84,8 @@ private final class ConcurrentHTTPServer: @unchecked Sendable {
         if path == "/disconnect" { connection.cancel(); return }
         let status = path == "/error" ? "503 Service Unavailable" : "200 OK"
         let framing = path == "/advertised-limit" ? "Content-Length: 1024" : "Transfer-Encoding: chunked"
-        let header = "HTTP/1.1 \(status)\r\n\(framing)\r\nX-Request: \(path)\r\nConnection: close\r\n\r\n"
+        let cookie = path == "/set-cookie" ? "Set-Cookie: heimdall-test=1; Path=/\r\n" : ""
+        let header = "HTTP/1.1 \(status)\r\n\(framing)\r\nX-Request: \(path)\r\n\(cookie)Connection: close\r\n\r\n"
         let body = path == "/large" || path == "/stream-limit" ? String(repeating: "x", count: 32) : "body:\(path)"
         let chunks = [String(body.prefix(body.count / 2)), String(body.suffix(body.count - body.count / 2))]
         let frames = chunks.map { "\(String($0.utf8.count, radix: 16))\r\n\($0)\r\n" } + ["0\r\n\r\n"]
@@ -178,5 +183,20 @@ final class SharedSessionTests: XCTestCase {
         XCTAssertEqual(next, Data("body:/recovered".utf8))
     }
 
+    /// The shared session outlives every request, so a Set-Cookie from one feed must not become a
+    /// Cookie header on the next request to that host.
+    func testSharedSessionDoesNotStoreOrReplayCookies() async throws {
+        let server = try ConcurrentHTTPServer(batchSize: 1)
+        defer { server.stop() }
+        let ready = expectation(description: "Loopback listener ready")
+        server.start(ready: ready)
+        await fulfillment(of: [ready], timeout: 5)
+        let base = "http://127.0.0.1:\(try XCTUnwrap(server.port))"
+        let first = try await HTTP.get(base + "/set-cookie")
+        XCTAssertEqual(first, Data("body:/set-cookie".utf8), "The Set-Cookie response must be consumed")
+        _ = try await HTTP.get(base + "/after-cookie")
+        let replayed = try XCTUnwrap(server.request(for: "/after-cookie"))
+        XCTAssertFalse(replayed.lowercased().contains("cookie:"), "Cookie replayed: " + replayed)
+    }
 }
 #endif

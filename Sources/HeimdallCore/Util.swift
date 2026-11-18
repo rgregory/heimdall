@@ -179,8 +179,18 @@ public enum HTTP {
     public static let defaultMaxBytes = 32 * 1024 * 1024
 
     private static let sharedDelegate = SessionDelegate()
+    /// One session for every request, so connections and TLS sessions are reused across a scan.
+    /// `delegateQueue: nil` gives it a serial delegate queue, which is what lets BoundedDownload
+    /// stay lock-free.
     private static let sharedSession: URLSession = {
         let c = URLSessionConfiguration.ephemeral
+        tune(c)
+        return URLSession(configuration: c, delegate: sharedDelegate, delegateQueue: nil)
+    }()
+
+    /// Settings the shared session and an injected test configuration both need. They live here so
+    /// the two paths cannot drift apart.
+    private static func tune(_ c: URLSessionConfiguration) {
         c.timeoutIntervalForRequest = 60
         c.timeoutIntervalForResource = 300
         // Revalidation is ours to do (DiskCache.fetch): URLSession's own cache would answer
@@ -188,8 +198,18 @@ public enum HTTP {
         c.urlCache = nil
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
         c.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
-        return URLSession(configuration: c, delegate: sharedDelegate, delegateQueue: nil)
-    }()
+        // The widest concurrentMap fan-out is 8. With one shared session this cap applies across
+        // every request in flight, so the default of 6 would hold two of them back.
+        c.httpMaximumConnectionsPerHost = 8
+        // Keys travel in explicit per-request headers (NVD's apiKey, VulnCheck's bearer token) and
+        // nothing here authenticates with cookies or a URLCredential. Left on, one shared session
+        // would let a feed set a cookie and have it replayed to that host for as long as the app
+        // runs, so refuse the storage outright rather than carry state no request needs.
+        c.httpShouldSetCookies = false
+        c.httpCookieAcceptPolicy = .never
+        c.httpCookieStorage = nil
+        c.urlCredentialStorage = nil
+    }
 
     public static func get(_ url: String, headers: [String: String] = [:], maxBytes: Int = defaultMaxBytes) async throws -> Data {
         try await send(url, method: "GET", body: nil, headers: headers, maxBytes: maxBytes).0
@@ -213,11 +233,7 @@ public enum HTTP {
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         let receiver = BoundedDownload(maxBytes: maxBytes)
         if let configuration {
-            configuration.timeoutIntervalForRequest = 60
-            configuration.timeoutIntervalForResource = 300
-            configuration.urlCache = nil
-            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-            configuration.httpAdditionalHeaders = ["User-Agent": "Heimdall/1.0 (macOS user-level vulnerability scanner)"]
+            tune(configuration)
             let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
             defer { session.invalidateAndCancel() }
             return try await withCheckedThrowingContinuation { continuation in
@@ -226,20 +242,28 @@ public enum HTTP {
             }
         }
         return try await withCheckedThrowingContinuation { continuation in
-            receiver.continuation = continuation
             let task = sharedSession.dataTask(with: req)
-            sharedDelegate.register(receiver, for: task.taskIdentifier)
+            sharedDelegate.register(receiver, continuation: continuation, for: task.taskIdentifier)
             task.resume()
         }
     }
 }
 
+/// Routes the shared session's callbacks to the BoundedDownload that owns the task.
 private final class SessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var receivers: [Int: BoundedDownload] = [:]
 
-    func register(_ receiver: BoundedDownload, for taskID: Int) {
-        lock.lock(); receivers[taskID] = receiver; lock.unlock()
+    /// Takes the continuation as well: writing it under the lock the delegate queue has to acquire
+    /// is what publishes it to that queue. Assigned at the call site instead, its visibility would
+    /// rest on the order of two unrelated statements, and reordering them would break nothing
+    /// a test could see.
+    func register(_ receiver: BoundedDownload, continuation: CheckedContinuation<(Data, HTTPURLResponse?), Error>,
+                  for taskID: Int) {
+        lock.lock()
+        receiver.continuation = continuation
+        receivers[taskID] = receiver
+        lock.unlock()
     }
 
     private func receiver(for task: URLSessionTask, remove: Bool = false) -> BoundedDownload? {
@@ -251,8 +275,14 @@ private final class SessionDelegate: NSObject, URLSessionDataDelegate, @unchecke
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        receiver(for: dataTask)?.urlSession(session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
-            ?? completionHandler(.cancel)
+        guard let receiver = receiver(for: dataTask) else {
+            // Unreachable: register runs before resume. Were it to happen, nothing would resume the
+            // continuation and the caller would wait forever, so fail loudly in debug builds.
+            assertionFailure("No receiver registered for task \(dataTask.taskIdentifier)")
+            completionHandler(.cancel)
+            return
+        }
+        receiver.urlSession(session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
@@ -264,8 +294,12 @@ private final class SessionDelegate: NSObject, URLSessionDataDelegate, @unchecke
     }
 }
 
-/// URLSession delivers these callbacks serially. Check both the advertised size and the
-/// actual decoded bytes, so chunked, compressed, or misleading responses cannot bypass it.
+/// Lock-free on purpose: every session that delivers to one of these is created with
+/// `delegateQueue: nil`, so URLSession serializes the callbacks onto a single queue. Give
+/// HTTP.sharedSession a concurrent delegate queue and the fields below become a data race.
+///
+/// Check both the advertised size and the actual decoded bytes, so chunked, compressed, or
+/// misleading responses cannot bypass the cap.
 private final class BoundedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     let maxBytes: Int
     var data = Data()
