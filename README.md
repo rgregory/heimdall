@@ -11,25 +11,17 @@ Claude wrote the code. A person decided what it needed to do and checked the res
 
 It runs as your normal user account. It doesn't need root, an admin password, Full Disk Access or a helper daemon. It only reads metadata your account can already read, and it never changes anything.
 
-## Sources
+## What it checks
 
-| Installed software | Read from | Checked against |
-|---|---|---|
-| macOS, Safari | `SystemVersion.plist`, `Info.plist` | Apple security releases and per-release notes, NVD |
-| Apps | `Info.plist` in `/Applications`, `~/Applications` | NVD (~70 mapped apps), Chrome Releases, Mozilla MFSA, Microsoft MSRC |
-| Runtimes inside apps | `Info.plist` of nested Electron, Chromium, Sparkle and Python frameworks; a bundled JRE's `release` file | NVD, as a child of the app that carries it |
-| Homebrew | `brew info --installed` | `brew vulns`, else OSV.dev |
-| Python, npm, cargo, gems | package metadata on disk | OSV.dev |
-| Go binaries | embedded build info | OSV.dev (Go, incl. `stdlib`) |
-| Browser extensions | Chromium and Firefox profiles | malicious-extension list |
+Everything comes from metadata your account can already read: the macOS and Safari version plists, `Info.plist` for apps in `/Applications` and `~/Applications`, the Electron, Chromium, Sparkle, Python and Java runtimes bundled inside those apps, `brew info --installed`, on-disk package metadata for Python, npm, cargo and gems, build info embedded in Go binaries, and Chrome and Firefox extension profiles.
+
+Those are matched against NVD, OSV.dev, `brew vulns`, Apple's per-release security notes, Chrome Releases, Mozilla MFSA, Microsoft MSRC and a list of extensions pulled for malware. Each advisory is then checked for signs of exploitation (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC), for public exploit code (Exploit-DB, Metasploit, nuclei) and for its EPSS probability, with missing scores filled in from cvelistV5 or CISA Vulnrichment. The app icon turns red while anything exploited is installed.
 
 An app's own version number says nothing about the engine inside it, so the frameworks it bundles are read separately: an Electron app can call itself current while carrying a browser engine from two years ago.
 
-Each advisory is then checked for signs of exploitation (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC) and for public exploit code (Exploit-DB, Metasploit, nuclei). FIRST EPSS gives the odds of exploitation, and cvelistV5 or CISA Vulnrichment fill in missing scores. Sparkle feeds, the App Store and Homebrew's cask index say when a newer version is out, and 13 news feeds are matched against what's installed. The app icon turns red while anything exploited is installed.
+Three questions about this Mac, rather than about the advisory, then shape what you see. `ps`, `lsof` and launchd say whether each vulnerable thing is running, started at login or listening on a socket. A history file says how long each finding has been open here. Homebrew's deprecation flags, the npm, PyPI and crates.io registries and a table of runtime end-of-life dates say which of them nobody is ever going to fix.
 
-Three things about this Mac, rather than about the advisory, then shape what you see. `ps`, `lsof` and launchd say whether each vulnerable thing is running, started at login or listening on a socket. A history file says how long each finding has been open here. Homebrew's own deprecation flags, the npm, PyPI and crates.io registries and a table of runtime end-of-life dates say which of them nobody is ever going to fix.
-
-[docs/OVERVIEW.md](docs/OVERVIEW.md) covers what gets sent where, download size limits, and adding your own app mappings.
+[docs/OVERVIEW.md](docs/OVERVIEW.md) is the full account: what is read and what it is matched against, how rows are ranked, what coverage and "fixed" actually mean, what leaves the Mac, and how to teach it about more apps.
 
 ## Build
 
@@ -49,19 +41,13 @@ The app is signed ad hoc, so the first launch needs a right-click → **Open**.
 
 - **⌘R** scans. Without an NVD API key the first scan takes a few minutes, because NVD only allows 5 requests every 30 seconds. Answers are cached for a day. You can add a free key in Settings → Matching; it's stored in your login keychain.
 - **Brief:** **Fix First** is exploited *and* fixable. **Blocked** is exploited with nothing to install yet — the owner hasn't shipped a build, so it's on the list but not on tonight's list. **Worth Updating** is everything else high or critical. Below that are the macOS and Safari status, counts by severity and section, and what changed since the last scan.
-- **Ranking:** rows are ordered by risk, not by CVSS alone — known exploitation, ransomware use, public exploit code and EPSS push a finding up, and so do a socket it's listening on, a process that's running right now, a launchd job that starts it, and weeks of sitting open. Having nothing to install pushes it down, as does being a dependency bundled inside something else rather than a program you run, or not running at all when the scan went past. Open any row and it tells you which of those applied, what it saw running, and how long the finding has been here.
-- **Not Maintained:** deprecated or disabled Homebrew formulae, releases yanked from npm, PyPI or crates.io after they shipped, and runtimes past their own end of life. There is no version to upgrade to, so the advice is to remove or replace them, and they appear even when nothing has been published against them yet. One inside an app isn't yours to uninstall: that one waits on the app's next build.
-- **Exploited:** a timeline of CISA KEV listings, grouped by month, with same-day listings for one product folded into a single line. A red dot means a vulnerable version is installed now; a green ring means the product is installed but no vulnerable version was found. You can switch between This Mac and Everything, and between 30 days, 90 days and 12 months.
-- **News:** the last 30 days from SANS ISC, The Hacker News, Krebs, Sophos, Securelist, WeLiveSecurity, Schneier, Troy Hunt, Graham Cluley, Darknet Diaries and USOM (TR-CERT). Stories are highlighted red when they name a CVE that's open on this Mac and pink when they name software you have installed. Darknet Diaries episodes are listed but never matched. Findings in the news get a newspaper icon, and the Brief shows this week's stories about your Mac. You can edit the feed list in Settings → News.
-- **Section pages** (macOS, Apps, Homebrew, Languages): one row per vulnerable package. Click a row to see how to fix it and which advisories apply, then click an advisory for the full details. Languages groups packages under the tool that bundles them.
-- **Advisories** lists every advisory in one sortable table. **Inventory** lists everything that was checked. **Sources** shows what was read and how recent it is.
-- Results appear as soon as the fast checks finish. The slower NVD lookups for apps and macOS fill in afterwards.
-- **Coverage:** Inventory shows each package's primary matcher outcome: checked, no product mapping, lookup unavailable, not checked, cached data only, or still checking. Hover for details. The Brief links to coverage gaps and source warnings. “Checked” describes that matcher, not a guarantee that the software is safe; vendor-only checks remain partial coverage.
-- **Verify fix:** open a finding and choose **Verify fix (rescan)** after updating. Heimdall runs a full scan and reports whether the finding is still detected, fixed, removed, no longer checked, or unconfirmed. “Since the Last Scan” uses the same distinctions. A disappearance at the same version is unconfirmed; changed scan settings, missing coverage, offline caches, and source warnings cannot confirm an upgrade as a fix. Ignoring a finding never counts as fixing it.
-- **Exceptions:** right-click an advisory or use the package menu to defer a finding. Enter a reason, select this version, this installation, or this advisory, and choose an expiry of 7, 30, or 90 days. Exceptions hide matching findings from totals and badges; they are reviewed at least once a minute while the app is running. Newly known exploitation reopens the finding. Accepting a known-exploited advisory only suppresses that specific advisory, even with a broader scope. Settings → Display lists exceptions and lets you remove them. Old ignores migrate to installation-specific advisory exceptions that expire after 30 days.
+- **Exploited** is a timeline of CISA KEV listings grouped by month, with same-day listings for one product folded into a single line. A red dot means a vulnerable version is installed now; a green ring means the product is installed but no vulnerable version was found. You can switch between This Mac and Everything, and between 30 days, 90 days and 12 months.
+- **Not Maintained** is the software nobody is going to fix, where the advice is to remove or replace rather than update. **News** is the last 30 days from 13 security feeds, with stories highlighted when they name a CVE that's open here. The **section pages** (macOS, Apps, Homebrew, Languages) give one row per vulnerable package; click through for how to fix it and which advisories apply, and Languages groups packages under the tool that bundles them. **Advisories**, **Inventory** and **Sources** list every advisory, everything that was checked, and how recent each source is.
+- Rows are ordered by risk rather than CVSS alone, and opening one says which signals applied — [Ranking](docs/OVERVIEW.md#ranking) is the list.
+- **Verify fix:** open a finding and choose **Verify fix (rescan)** after updating. **Exceptions:** right-click an advisory or use the package menu to defer a finding for 7, 30 or 90 days with a reason, and Settings → Display lists them. Both are deliberately strict about what counts as fixed — [Coverage, remediation and exceptions](docs/OVERVIEW.md#coverage-remediation-and-exceptions) says how strict.
 - **Export:** JSON (the full report) or CSV (one row per advisory).
 - **Menu bar:** an eye in the menu bar shows the exploited count and opens a panel with the status, the most urgent few findings, Scan Now and Quit. Settings → Display can hide the Dock icon, which turns Heimdall into a menu bar app: it keeps running with the window closed and opens from the panel. The Dock icon can only be hidden while the menu bar item is shown, and neither setting needs a relaunch.
-- While the app is open it rescans every 12 hours. You can change the interval in Settings → Display.
+- Results appear as soon as the fast checks finish; the slower NVD lookups for apps and macOS fill in afterwards. While the app is open it rescans every 12 hours, and you can change the interval in Settings → Display.
 
 ### Headless
 
@@ -88,12 +74,9 @@ Every feed is cached on disk with its own lifetime — an hour for news, 12 hour
 ## Limits
 
 - Heimdall only sees what your account can see. Apps installed elsewhere for one user, system daemons and other users' packages aren't covered.
-- Microsoft Office for Mac is left out of NVD matching on purpose. NVD describes Office by release year and channel, not build number, so matching on version would mostly produce false hits.
-- Homebrew formulae without `brew vulns` only match when OSV knows the upstream repo and the release tag lines up with the version.
-- Go vulnerability data carries no CVSS, so Go findings show as *unrated* unless they're on KEV.
 - "Running" and "listening" are a snapshot taken while the scan ran, and `lsof` only reports this account's sockets without root. Nothing running then doesn't mean nothing ever runs, so it nudges the order rather than deciding it.
-- The version inside an Electron or CEF framework is read as a Chromium version only when it is shaped like one: four parts, a major in the low hundreds and a build number in the thousands (`128.0.6613.186`). CEF borrows Chromium's major for its own numbering (`156.0.15.0` is CEF 156.0.15), and comparing that against Chrome's ranges would flag every advisory in the 156 line, so it isn't. Those copies are listed in Inventory without matching, and an Electron-shaped version is matched as Electron. Chromium findings inside an app are marked *inferred* when NVD hasn't analysed the entry for that engine.
-- Withdrawn releases are checked for npm, PyPI and crates.io packages that already have an advisory, up to 60 a scan. Ruby gems aren't covered, and neither is a project that simply stopped getting commits.
+- "Checked" describes the matcher that ran, not a guarantee that the software is safe. Inventory shows the outcome per package, and the Brief links to the gaps.
+- Office for Mac, Go's missing scores, Homebrew formulae without `brew vulns`, Chromium versions read from inside apps and withdrawn releases all come with caveats of their own: [Limits](docs/OVERVIEW.md#limits) has them.
 
 ## License
 
