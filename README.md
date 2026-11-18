@@ -17,10 +17,13 @@ It runs as your normal user account. It doesn't need root, an admin password, Fu
 |---|---|---|
 | macOS, Safari | `SystemVersion.plist`, `Info.plist` | Apple security releases and per-release notes, NVD |
 | Apps | `Info.plist` in `/Applications`, `~/Applications` | NVD (~70 mapped apps), Chrome Releases, Mozilla MFSA, Microsoft MSRC |
+| Runtimes inside apps | `Info.plist` of nested Electron, Chromium, Sparkle and Python frameworks; a bundled JRE's `release` file | NVD, as a child of the app that carries it |
 | Homebrew | `brew info --installed` | `brew vulns`, else OSV.dev |
 | Python, npm, cargo, gems | package metadata on disk | OSV.dev |
 | Go binaries | embedded build info | OSV.dev (Go, incl. `stdlib`) |
 | Browser extensions | Chromium and Firefox profiles | malicious-extension list |
+
+An app's own version number says nothing about the engine inside it, so the frameworks it bundles are read separately: an Electron app can call itself current while carrying a browser engine from two years ago.
 
 Each advisory is then checked for signs of exploitation (CISA KEV, MSRC, EUVD, VulnCheck, CISA SSVC) and for public exploit code (Exploit-DB, Metasploit, nuclei). FIRST EPSS gives the odds of exploitation, and cvelistV5 or CISA Vulnrichment fill in missing scores. Sparkle feeds, the App Store and Homebrew's cask index say when a newer version is out, and 13 news feeds are matched against what's installed. The app icon turns red while anything exploited is installed.
 
@@ -83,6 +86,7 @@ Every feed is cached on disk with its own lifetime — an hour for news, 12 hour
 - Microsoft Office for Mac is left out of NVD matching on purpose. NVD describes Office by release year and channel, not build number, so matching on version would mostly produce false hits.
 - Homebrew formulae without `brew vulns` only match when OSV knows the upstream repo and the release tag lines up with the version.
 - Go vulnerability data carries no CVSS, so Go findings show as *unrated* unless they're on KEV.
+- The version inside an Electron or CEF framework is read as a Chromium version only when it is shaped like one: four parts, a major in the low hundreds and a build number in the thousands (`128.0.6613.186`). CEF borrows Chromium's major for its own numbering (`156.0.15.0` is CEF 156.0.15), and comparing that against Chrome's ranges would flag every advisory in the 156 line, so it isn't. Those copies are listed in Inventory without matching, and an Electron-shaped version is matched as Electron. Chromium findings inside an app are marked *inferred* when NVD hasn't analysed the entry for that engine.
 
 ## License
 

@@ -21,6 +21,14 @@ public enum AppCatalog {
     }
 
     public static let builtIn: [AppCPE] = [
+        // Runtimes bundled inside other apps, under the synthetic ids BundledCollector gives
+        // them. The Chromium engine inside an Electron or CEF app is matched as Chromium,
+        // because that is what the version in the framework is.
+        e("org.chromium.engine", ["google:chrome", "chromium:chromium"], "^google$", "chrom"),
+        e("org.electronjs.Electron", ["electronjs:electron", "electron:electron"]),
+        e("org.sparkle-project.Sparkle", ["sparkle_project:sparkle", "sparkle-project:sparkle"]),
+        e("org.python.python", ["python:python", "python_software_foundation:python"]),
+        e("com.oracle.java.jre", ["oracle:jre", "oracle:jdk"]),
         // Browsers
         e("com.google.Chrome", ["google:chrome"], "^google$", "chrom"),
         e("com.google.Chrome.beta", ["google:chrome"], "^google$", "chrom"),

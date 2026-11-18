@@ -15,6 +15,9 @@ Details behind the [README](../README.md): how matching works, what leaves the M
 | Ruby gems | gem specifications outside `/System` | OSV.dev (RubyGems) |
 | Go binaries | build info embedded in binaries in `~/go/bin` (optionally Homebrew's bin), parsed directly | OSV.dev (Go, incl. `stdlib`) |
 | Browser extensions | `manifest.json` in Chrome, Brave, Edge, Vivaldi, Arc and Opera profiles; Firefox `extensions.json` | A community list of ~8,300 Chrome Web Store IDs removed for malware |
+| Runtimes inside apps | `Contents/Frameworks/{Electron Framework,Chromium Embedded Framework,Sparkle,Python}.framework` and a bundled JRE's `release` file | NVD by CPE, as a child of the host app |
+
+Apple's own bundles are skipped there — they move with macOS — except Safari and Xcode. A nested framework's version decides what it can be compared against. Four numeric parts with a major in the low hundreds *and* a build number in the thousands is a Chromium version, and is matched as Chromium. Two or three parts is Electron's own, and is matched as Electron. CEF's numbering takes Chromium's major and continues with its own small numbers (`156.0.15.0` is CEF 156.0.15, whose engine is really 156.0.8011.x), so it matches nothing published and is inventory only — comparing it against Chrome's ranges would mark every advisory in that major line as present here. The fix for any of them is a new build of the host app, never the framework, and the advice says so.
 
 Vendor advisories give exact fixed versions, often days before NVD does. Heimdall reads Apple's per-release security notes for the macOS and Safari releases you're missing, Chrome Releases (stable channel), Mozilla Foundation Security Advisories (Firefox, ESR, Thunderbird), and Microsoft's monthly MSRC releases (Office for Mac, Teams, Edge and VS Code, matched by build number).
 

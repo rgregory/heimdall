@@ -23,6 +23,8 @@ public struct ScanOptions: Codable, Sendable, Equatable {
     public var updateChecks = true
     /// Browser extensions in your profiles, against a malicious-extension list.
     public var extensions = true
+    /// Electron, Chromium, Sparkle, Python and Java runtimes inside application bundles.
+    public var bundled = true
     /// Security news feeds, matched to what's installed.
     public var news = true
     public var newsFeeds: [NewsFeed] = NewsFeed.defaults
@@ -46,6 +48,7 @@ public struct ScanOptions: Codable, Sendable, Equatable {
         exploitSignals = try c.decodeIfPresent(Bool.self, forKey: .exploitSignals) ?? d.exploitSignals
         updateChecks = try c.decodeIfPresent(Bool.self, forKey: .updateChecks) ?? d.updateChecks
         extensions = try c.decodeIfPresent(Bool.self, forKey: .extensions) ?? d.extensions
+        bundled = try c.decodeIfPresent(Bool.self, forKey: .bundled) ?? d.bundled
         news = try c.decodeIfPresent(Bool.self, forKey: .news) ?? d.news
         newsFeeds = (try c.decodeIfPresent([NewsFeed].self, forKey: .newsFeeds) ?? d.newsFeeds).filter { !NewsFeed.retired.contains($0.url) }
     }
@@ -80,6 +83,11 @@ public struct Scanner: Sendable {
             progress("Reading application bundles", 0.03)
             let a = AppCollector.collect(extraRoots: options.extraAppRoots)
             packages += a.packages; sources += a.status
+        }
+        if options.apps && options.bundled {
+            progress("Reading runtimes bundled inside apps", 0.04)
+            let b = BundledCollector.collect(apps: packages)
+            packages += b.packages; sources += b.status
         }
         var brewVulns: Data?
         if options.homebrew {
@@ -211,18 +219,28 @@ public struct Scanner: Sendable {
                 if let e = AppCatalog.entry(for: p, in: catalog) { targets.append((p, e)) }
             }
             var unbounded = 0, failed: [String] = []
+            // Five apps can carry the same Sparkle, and each copy is still evaluated on its own
+            // (their install dates differ, and the KEV date heuristic reads those), but the
+            // lookups behind them are one cached answer and don't need announcing five times.
+            var announced = Set<String>()
             for (i, (p, entry)) in targets.enumerated() {
-                progress("NVD: \(p.name) \(p.version)\(nvdAPIKey == nil ? " (rate-limited without an API key)" : "")", 0.32 + 0.58 * Double(i) / Double(max(targets.count, 1)))
+                let what = "\(p.name) \(p.version)"
+                if announced.insert(what).inserted {
+                    progress("NVD: \(what)\(nvdAPIKey == nil ? " (rate-limited without an API key)" : "")", 0.32 + 0.58 * Double(i) / Double(max(targets.count, 1)))
+                }
                 let r = await nvdMatch(p, entry, nvd: nvd, kev: kev, posture: posture)
                 add(p.id, r.vulns); unbounded += r.unbounded
                 if r.failed { failed.append(p.name) }
                 if !r.vulns.isEmpty { interim() }
             }
             let reqs = await nvd.requests
-            let detail = "\(targets.count) products checked, \(reqs) requests" + (nvdAPIKey == nil ? " (no API key: ~6 s apart)" : "")
+            let copies = targets.count - announced.count
+            let detail = "\(announced.count) products checked"
+                + (copies > 0 ? " (\(copies) more \(copies == 1 ? "copy" : "copies") of the same versions, from cache)" : "")
+                + ", \(reqs) requests" + (nvdAPIKey == nil ? " (no API key: ~6 s apart)" : "")
                 + (unbounded > 0 && !options.includeUnbounded ? "; \(unbounded) matches without version bounds ignored" : "")
                 + (failed.isEmpty ? "" : "; no answer for \(failed.joined(separator: ", "))")
-            sources.append(SourceStatus(name: "NVD", state: failed.isEmpty ? .ok : .warning, detail: detail, count: targets.count, updated: Date()))
+            sources.append(SourceStatus(name: "NVD", state: failed.isEmpty ? .ok : .warning, detail: detail, count: announced.count, updated: Date()))
         } else {
             sources.append(SourceStatus(name: "NVD", state: .skipped, detail: "turned off in Settings — apps, macOS and Safari are not checked"))
         }
@@ -392,6 +410,14 @@ public struct Scanner: Sendable {
             let file = (packages[i].location as NSString).lastPathComponent
             if let t = appToCask[file] { packages[i].cask = t }
         }
+        // A runtime inside an app is updated by updating the app, so it needs the app's cask.
+        var appCask: [String: String] = [:]
+        for p in packages where p.ecosystem == .app && p.parent == nil {
+            if let c = p.cask { appCask[p.name] = c }
+        }
+        for i in packages.indices where packages[i].ecosystem == .app && packages[i].cask == nil {
+            if let parent = packages[i].parent, let c = appCask[parent] { packages[i].cask = c }
+        }
     }
 
     /// Re-derive owners and advice for a saved report, so new advice shows without a rescan.
@@ -411,6 +437,24 @@ public struct Scanner: Sendable {
     public static func fixSteps(_ p: Package, _ vulns: [Vulnerability], packages: [Package]) -> [String] {
         let fixedIn = vulns.compactMap { v in v.fixed.filter { isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) }) }
             .max(by: { Version.less($0, $1) })
+        // A runtime inside an app has no update path of its own, so the advice is the host app's:
+        // "update Sparkle from its menu" names a framework nobody can act on.
+        if p.ecosystem == .app, let host = p.parent {
+            let hostPkg = packages.first { $0.ecosystem == .app && $0.parent == nil && $0.name == host }
+            let fix = fixedIn.map { ", and the advisories here are fixed in \($0)" } ?? ""
+            var steps = ["\(host) bundles \(p.name) \(p.version)\(fix)."]
+            if let h = hostPkg, h.outdated, let latest = h.latest {
+                steps.append("\(host) \(h.version) is installed and \(latest) is out — take that, and check afterwards whether the copy inside it moved:")
+                steps.append(fixHint(h, []))
+            } else if let h = hostPkg {
+                steps.append("Nothing here updates on its own, and \(host) is already current, so a fixed copy has to come from whoever builds \(host):")
+                steps.append(fixHint(h, []))
+            } else {
+                steps.append("Nothing here updates on its own — a fixed copy arrives in the next \(host) build.")
+            }
+            steps.append("Until then the flaw is only reachable through \(host) itself.")
+            return steps
+        }
         switch p.ecosystem {
         case .go:
             let bin = p.parent ?? "the binary"
@@ -619,6 +663,12 @@ public struct Scanner: Sendable {
         case .homebrew: return "brew upgrade \(Shell.quote(p.name))"
         case .cask: return "brew upgrade --cask \(Shell.quote(p.name))"
         case .app:
+            if let host = p.parent {
+                // Name the app, not the framework inside it: that is the only thing to update.
+                let what = " — it bundles \(p.name) \(p.version)"
+                if let c = p.cask, isPackageName(c) { return "brew upgrade --cask \(Shell.quote(c))\(what)" }
+                return "Update \(host) from its menu (Check for Updates…)\(what)"
+            }
             if let c = p.cask { return "brew upgrade --cask \(Shell.quote(c))" }
             if p.appStore { return "Update \(p.name) from the App Store" }
             // Edge left Microsoft AutoUpdate at version 113 and the MAU policy went obsolete at 140:

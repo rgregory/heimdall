@@ -35,6 +35,7 @@ struct SourcesSettings: View {
                 Toggle("Go binaries in ~/go/bin", isOn: $model.options.languages.go)
                 Toggle("…and Go programs in Homebrew's bin", isOn: $model.options.languages.goInHomebrew).disabled(!model.options.languages.go).padding(.leading, 16)
                 Toggle("Browser extensions (Chrome, Brave, Edge, Vivaldi, Arc, Opera, Firefox)", isOn: $model.options.extensions)
+                Toggle("Runtimes bundled inside apps (Electron, Chromium, Sparkle, Python, Java)", isOn: $model.options.bundled).disabled(!model.options.apps)
             }
             Section {
                 PathList(title: "Extra virtualenvs or site-packages", paths: $model.options.languages.extraPythonRoots)
