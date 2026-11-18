@@ -27,6 +27,8 @@ public struct ScanOptions: Codable, Sendable, Equatable {
     public var bundled = true
     /// Whether each vulnerable thing is running, started by launchd or listening on a socket.
     public var exposure = true
+    /// Deprecated and disabled Homebrew formulae, withdrawn releases, end-of-life runtimes.
+    public var maintenance = true
     /// Security news feeds, matched to what's installed.
     public var news = true
     public var newsFeeds: [NewsFeed] = NewsFeed.defaults
@@ -52,6 +54,7 @@ public struct ScanOptions: Codable, Sendable, Equatable {
         extensions = try c.decodeIfPresent(Bool.self, forKey: .extensions) ?? d.extensions
         bundled = try c.decodeIfPresent(Bool.self, forKey: .bundled) ?? d.bundled
         exposure = try c.decodeIfPresent(Bool.self, forKey: .exposure) ?? d.exposure
+        maintenance = try c.decodeIfPresent(Bool.self, forKey: .maintenance) ?? d.maintenance
         news = try c.decodeIfPresent(Bool.self, forKey: .news) ?? d.news
         newsFeeds = (try c.decodeIfPresent([NewsFeed].self, forKey: .newsFeeds) ?? d.newsFeeds).filter { !NewsFeed.retired.contains($0.url) }
     }
@@ -109,6 +112,9 @@ public struct Scanner: Sendable {
         annotateCasks(&packages)
         annotateGoOwners(&packages)
         if let s = packages.first(where: { $0.bundleID == "com.apple.Safari" }) { posture.safariVersion = s.version }
+        if options.maintenance {
+            sources.append(MaintenanceCheck.local(&packages))
+        }
         if options.exposure {
             progress("Checking what is running and what is listening", 0.14)
             sources.append(await ExposureCollector.annotate(&packages))
@@ -318,6 +324,12 @@ public struct Scanner: Sendable {
         }
 
         var report = Self.assemble(packages: packages, vulns: vulns, posture: posture, sources: sources, kev: kev)
+        if options.maintenance {
+            progress("Asking the registries about withdrawn releases", 0.96)
+            let withdrawn = await MaintenanceCheck.registry(&report, offline: options.offline)
+            report.sources.append(withdrawn)
+            Self.refreshAdvice(&report)
+        }
         if options.news, !options.newsFeeds.isEmpty {
             progress("Reading security news", 0.98)
             let (items, st) = await News.load(feeds: options.newsFeeds, packages: report.packages, findings: report.findings, offline: options.offline)
@@ -444,6 +456,24 @@ public struct Scanner: Sendable {
 
     /// Concrete "how": what to run, in order, and what to do if there's nothing to run yet.
     public static func fixSteps(_ p: Package, _ vulns: [Vulnerability], packages: [Package]) -> [String] {
+        // Never-going-to-be-fixed comes first: an upgrade command would send you looking for a
+        // release that doesn't exist.
+        if let m = p.maintenance, m.terminal {
+            var steps = ["\(p.name) \(p.version) will not be fixed. \(m.reason)"]
+            if let r = m.replacement { steps.append("\(m.source) points at \(r) instead.") }
+            if let host = p.parent {
+                steps.append("It is bundled inside \(host), so this isn't yours to uninstall: the fix is a \(host) build made against something maintained.")
+                if let c = p.cask { steps.append("brew upgrade --cask \(c)") }
+                steps.append("If \(host) keeps shipping it, the real options are to stop using \(host) or to accept the risk knowingly.")
+                return steps
+            }
+            steps.append("Remove it, or move to something still maintained:")
+            steps.append(removeHint(p, m))
+            if let e = p.exposure, e.any {
+                steps.append("It is \(e.summary) right now, so check what depends on it before it goes.")
+            }
+            return steps
+        }
         let fixedIn = vulns.compactMap { v in v.fixed.filter { isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) }) }
             .max(by: { Version.less($0, $1) })
         // A runtime inside an app has no update path of its own, so the advice is the host app's:
@@ -643,7 +673,35 @@ public struct Scanner: Sendable {
         }
     }
 
+    /// What to do about something no release is ever going to fix: take it off the Mac, or move
+    /// to whatever the source named in its place.
+    public static func removeHint(_ p: Package, _ m: Maintenance) -> String {
+        let instead = m.replacement.map { " — \($0) replaces it" } ?? ""
+        let name = p.parent ?? p.name
+        guard isPackageName(p.name), isPackageName(name) else {
+            return "Remove \(p.name) — nothing newer is coming. Its metadata has an invalid package name, so there is no command to copy."
+        }
+        switch p.ecosystem {
+        case .homebrew: return "brew uninstall \(Shell.quote(p.name))\(instead)"
+        case .cask: return "brew uninstall --cask \(Shell.quote(p.name))\(instead)"
+        case .pypi: return "python3 -m pip uninstall \(Shell.quote(p.name))\(instead)  — in \(p.location)"
+        case .npm: return "npm uninstall -g \(Shell.quote(name))\(instead)"
+        case .crates: return "cargo uninstall \(Shell.quote(p.name))\(instead)"
+        case .rubygems: return "gem uninstall \(Shell.quote(p.name))\(instead)"
+        case .browserExtension: return "Remove it: \(p.browser ?? "the browser") → Extensions → \(p.name) → Remove"
+        case .app:
+            if let host = p.parent { return "Nothing to uninstall on its own — it ships inside \(host)\(instead)" }
+            if let c = p.cask { return "brew uninstall --cask \(Shell.quote(c))\(instead)" }
+            return "Remove \(p.name) — nothing newer is coming\(instead)"
+        case .go:
+            if let f = p.brewFormula { return "brew uninstall \(Shell.quote(f))\(instead)" }
+            return "Remove \(p.parent ?? p.name) — nothing newer is coming\(instead)"
+        case .macos: return "System Settings → General → Software Update"
+        }
+    }
+
     public static func fixHint(_ p: Package, _ vulns: [Vulnerability]) -> String {
+        if let m = p.maintenance, m.terminal { return removeHint(p, m) }
         // Per advisory, the first fixed release above what's installed; then the highest of those.
         let firsts = vulns.compactMap { v in
             v.fixed.filter { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) })

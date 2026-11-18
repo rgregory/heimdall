@@ -21,10 +21,11 @@ Apple's own bundles are skipped there — they move with macOS — except Safari
 
 ## Reachability, age and maintenance
 
-Questions about this Mac, asked after the inventory is read and folded into the ranking:
+Three questions about this Mac, asked after the inventory is read and folded into the ranking:
 
 - **Is it reachable?** `ps -axo pid=,comm=` for what's running, `lsof -nP -iTCP -sTCP:LISTEN` for what's listening (this account only, without root), the LaunchAgent and LaunchDaemon plists a normal user can read, and `launchctl list` for what launchd has loaded. A package is matched to a process by path — an app bundle prefix, a Homebrew keg or the `bin` symlink Homebrew links it to. A library inside an interpreter can't be seen running, so it is left unanswered rather than called idle, and a browser extension follows its browser. Nothing is launched and no process is inspected.
 - **How long has it been open?** First sightings are kept in `history.json`, keyed by package and advisory without the version, so an advisory that survives a patch release is the same open problem rather than a new one. A finding over a week old is pushed up, and the row says since when. The same file keeps one small row per scan — counts only — for the trend.
+- **Will anyone fix it?** `brew info` reports its own deprecated and disabled formulae and casks, with Homebrew's reason and replacement. npm, PyPI and crates.io are asked whether the installed release was yanked or the package deprecated, for packages that already have an advisory, capped at 60 a scan and cached for a week. A dated table of release calendars covers runtimes past end of life — Python, Node, Ruby, OpenSSL, PHP and PostgreSQL formulae. Because the table is dated, an entry only counts from the day it expires, and a stale copy under-reports instead of inventing something.
 
 Vendor advisories give exact fixed versions, often days before NVD does. Heimdall reads Apple's per-release security notes for the macOS and Safari releases you're missing, Chrome Releases (stable channel), Mozilla Foundation Security Advisories (Firefox, ESR, Thunderbird), and Microsoft's monthly MSRC releases (Office for Mac, Teams, Edge and VS Code, matched by build number).
 
@@ -43,6 +44,7 @@ Matches come from published ranges of affected versions. The exception is anythi
 - **App Store:** bundle IDs of App Store apps. **Sparkle feeds:** each app's own update URL is fetched.
 - **News feeds, vendor feeds, Exploit-DB, Metasploit, nuclei, cask index, EUVD, cvelistV5:** plain downloads (CVE IDs in the URL for cvelistV5/Vulnrichment). **VulnCheck:** your token.
 - **FIRST EPSS:** CVE ids.
+- **npm, PyPI, crates.io:** the name and version of a package that already has an advisory.
 - **CISA KEV catalog and Apple's security-release index:** plain downloads.
 
 No paths, file contents or host names are sent. Offline mode (in Settings) uses cached data only and skips `brew vulns`.

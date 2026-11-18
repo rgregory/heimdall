@@ -79,6 +79,40 @@ public struct Exposure: Codable, Hashable, Sendable {
     }
 }
 
+/// Software nobody is going to fix: deprecated or disabled in Homebrew, withdrawn from its
+/// registry, or a runtime past the end of its own maintainers' support. An upgrade command would
+/// be the wrong advice, so these carry their own.
+public struct Maintenance: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case deprecated, disabled, withdrawn, endOfLife
+
+        public var title: String {
+            switch self {
+            case .deprecated: return "Deprecated"
+            case .disabled: return "Disabled"
+            case .withdrawn: return "Withdrawn"
+            case .endOfLife: return "End of life"
+            }
+        }
+    }
+    public var state: State
+    /// What the source said, in its words where it has them.
+    public var reason: String = ""
+    /// "brew info", "npm registry", "PyPI", "crates.io", "release calendar".
+    public var source: String = ""
+    public var since: Date? = nil
+    /// What to use instead, when the source names something.
+    public var replacement: String? = nil
+
+    public init(state: State, reason: String = "", source: String = "", since: Date? = nil, replacement: String? = nil) {
+        self.state = state; self.reason = reason; self.source = source; self.since = since; self.replacement = replacement
+    }
+
+    /// Deprecated is a warning about the future; the rest mean no fixed release is ever coming,
+    /// which makes removal the fix rather than a wait.
+    public var terminal: Bool { state != .deprecated }
+}
+
 public struct Package: Codable, Hashable, Identifiable, Sendable {
     public var ecosystem: Ecosystem
     public var name: String
@@ -117,6 +151,8 @@ public struct Package: Codable, Hashable, Identifiable, Sendable {
     /// Whether this is reachable right now: running, started by launchd, listening. nil means the
     /// question can't be answered for this kind of package (a library inside an interpreter).
     public var exposure: Exposure? = nil
+    /// Set when nothing is ever going to fix this one.
+    public var maintenance: Maintenance? = nil
 
     public var id: String { "\(ecosystem.rawValue):\(parent.map { $0 + ">" } ?? "")\(name)@\(version)@\(location)" }
 
@@ -248,8 +284,9 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
     public var priority: Double { vulns.map(\.priority).max() ?? 0 }
     public var ransomware: Bool { vulns.contains { $0.kev?.ransomware == true } }
 
-    /// What the advisories say, adjusted for this Mac: whether there is anything to install, and
-    /// whether you run this code yourself. Computed, never stored, so it tracks the latest advice.
+    /// What the advisories say, adjusted for this Mac: whether there is anything to install,
+    /// whether anyone is ever going to ship one, whether you run this code at all, and how long
+    /// it has been sitting here. Computed, never stored, so it tracks the latest advice.
     public var risk: Risk {
         var score = priority
         var factors: [String] = []
@@ -259,14 +296,24 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
         if let e = vulns.compactMap(\.epss).max(), e >= 0.05 {
             factors.append("\(Int((e * 100).rounded()))% chance of attack in 30 days")
         }
-        // Two advisories of equal severity are not equal work: one is a command, the other is a wait.
-        let blocked = awaitingRelease == true
-        if blocked {
+        // Three different situations, not two: a command to run, a wait for someone else to ship,
+        // and a thing that will never be fixed. The last one is work you can do tonight — it just
+        // isn't an upgrade — so it ranks with the fixable rather than with the stuck.
+        let abandoned = package.maintenance?.terminal == true
+        let blocked = awaitingRelease == true && !abandoned
+        if abandoned {
+            score += 120
+            factors.append("no fix is ever coming — \(package.maintenance?.state.title.lowercased() ?? "unmaintained")")
+        } else if blocked {
             score -= 400
             factors.append("nothing to install yet")
         } else if !fixHint.isEmpty {
             score += 150
             factors.append("fixable now")
+        }
+        if package.maintenance?.state == .deprecated {
+            score += 20
+            factors.append("deprecated upstream")
         }
         // Reachability. The same flaw in something listening on a socket and in something that
         // hasn't run since it was installed are not the same evening's work.
@@ -291,7 +338,7 @@ public struct Finding: Codable, Hashable, Identifiable, Sendable {
             score += min(80, Double(days) * 2)
             factors.append("open for \(days) days")
         }
-        return Risk(score: score, factors: factors, blocked: blocked)
+        return Risk(score: score, factors: factors, blocked: blocked, abandoned: abandoned)
     }
 }
 
@@ -301,6 +348,8 @@ public struct Risk: Sendable, Hashable {
     public var factors: [String]
     /// Exploited or severe, but nothing to install: it belongs on the list, not on tonight's list.
     public var blocked: Bool
+    /// No released version will ever fix this, so the fix is to remove or replace it.
+    public var abandoned: Bool = false
 }
 
 public struct SourceStatus: Codable, Hashable, Identifiable, Sendable {
@@ -362,6 +411,12 @@ public struct ScanReport: Codable, Sendable {
     public var urgent: Bool { kevCount > 0 }
     public var outdatedPackages: [Package] { packages.filter { $0.outdated && $0.latest != nil } }
     public var kevFindings: [Finding] { findings.filter { $0.kevCount > 0 }.sorted { $0.risk.score > $1.risk.score } }
+    /// Installed things no release will ever fix, whether or not an advisory names them yet.
+    public var unmaintained: [Package] {
+        packages.filter { $0.maintenance?.terminal == true }.sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+    /// Findings whose fix is removal rather than an upgrade.
+    public var abandonedFindings: [Finding] { findings.filter { $0.risk.abandoned }.sorted { $0.risk.score > $1.risk.score } }
     /// Findings on something running, started by launchd or listening right now.
     public var reachableFindings: [Finding] { findings.filter { $0.package.exposure?.any == true }.sorted { $0.risk.score > $1.risk.score } }
     public var kevCount: Int { Set(allVulns.filter { $0.1.isKEV }.map { $0.0.id + $0.1.headlineID }).count }

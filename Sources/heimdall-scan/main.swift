@@ -42,6 +42,12 @@ if !report.kevFindings.isEmpty {
         print("    → \(f.fixHint)")
     }
 }
+if !report.unmaintained.isEmpty {
+    print("\nNot maintained — no newer version is ever coming")
+    for p in report.unmaintained.prefix(15) {
+        print("  \(p.displayName) \(p.version): \(p.maintenance?.reason ?? "") (\(p.maintenance?.source ?? ""))")
+    }
+}
 print("\nTop findings")
 for f in report.findings.prefix(15) {
     let worst = f.topSeverity.rawValue

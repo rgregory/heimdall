@@ -202,6 +202,129 @@ final class ExposureTests: XCTestCase {
     }
 }
 
+final class MaintenanceTests: XCTestCase {
+    func testBrewDeprecationIsRead() {
+        let j: [String: Any] = [
+            "formulae": [["name": "openssl@1.1", "installed": [["version": "1.1.1w"]], "linked_keg": "1.1.1w",
+                          "deprecated": true, "deprecation_date": "2023-09-11", "deprecation_reason": "unmaintained",
+                          "deprecation_replacement": "openssl@3", "outdated": false]],
+            "casks": [["token": "old-app", "installed": "1.0", "artifacts": [["app": ["Old.app"]]],
+                       "disabled": true, "disable_reason": "repo_archived", "outdated": false]],
+        ]
+        let pkgs = BrewCollector.parse(j, prefix: "/opt/homebrew")
+        let formula = try! XCTUnwrap(pkgs.first { $0.name == "openssl@1.1" }.flatMap(\.maintenance))
+        XCTAssertEqual(formula.state, .deprecated)
+        XCTAssertTrue(formula.reason.contains("nobody is maintaining it upstream"))
+        XCTAssertEqual(formula.replacement, "openssl@3")
+        XCTAssertFalse(formula.terminal, "deprecated still installs and may still get a version")
+
+        let cask = try! XCTUnwrap(pkgs.first { $0.name == "old-app" }.flatMap(\.maintenance))
+        XCTAssertEqual(cask.state, .disabled)
+        XCTAssertTrue(cask.terminal)
+        XCTAssertTrue(cask.reason.contains("repository is archived"))
+    }
+
+    func testEndOfLifeOnlyCountsAfterTheDate() {
+        var pkgs = [
+            Package(ecosystem: .homebrew, name: "node@18", version: "18.20.4"),
+            Package(ecosystem: .homebrew, name: "node@24", version: "24.1.0"),
+            Package(ecosystem: .homebrew, name: "python@3.9", version: "3.9.19"),
+        ]
+        // A day before Node 18 went out of support, nothing is said about it.
+        MaintenanceCheck.local(&pkgs, now: MaintenanceCheck.day.date(from: "2025-04-01")!)
+        XCTAssertNil(pkgs[0].maintenance)
+        MaintenanceCheck.local(&pkgs, now: MaintenanceCheck.day.date(from: "2026-11-18")!)
+        XCTAssertEqual(pkgs[0].maintenance?.state, .endOfLife)
+        XCTAssertTrue(pkgs[0].maintenance?.terminal == true)
+        XCTAssertNil(pkgs[1].maintenance, "a supported release is left alone")
+        XCTAssertEqual(pkgs[2].maintenance?.state, .endOfLife)
+    }
+
+    func testBrewsOwnWordWins() {
+        var pkgs = [Package(ecosystem: .homebrew, name: "python@3.9", version: "3.9.19")]
+        pkgs[0].maintenance = Maintenance(state: .disabled, reason: "Homebrew has disabled this formula.", source: "brew info")
+        MaintenanceCheck.local(&pkgs, now: Date())
+        XCTAssertEqual(pkgs[0].maintenance?.source, "brew info")
+    }
+
+    func testAdviceIsRemovalNotUpgrade() {
+        var p = Package(ecosystem: .homebrew, name: "openssl@1.1", version: "1.1.1w")
+        p.maintenance = Maintenance(state: .endOfLife, reason: "OpenSSL 1.1.1 stopped getting security fixes on 11 September 2023.",
+                                    source: "release calendar", replacement: "openssl@3")
+        var v = Vulnerability(id: "CVE-2024-1"); v.fixed = []
+        XCTAssertTrue(Scanner.fixHint(p, [v]).hasPrefix("brew uninstall 'openssl@1.1'"))
+        let steps = Scanner.fixSteps(p, [v], packages: [p])
+        XCTAssertTrue(steps.contains { $0.contains("will not be fixed") })
+        XCTAssertTrue(steps.contains { $0.hasPrefix("brew uninstall") })
+
+        // Inside an app there is nothing to uninstall, and saying otherwise would be wrong.
+        var bundled = Package(ecosystem: .app, name: "Chromium", version: "89.0.4389.90", location: "/Applications/Demo.app/Contents/Frameworks/Electron Framework.framework")
+        bundled.parent = "Demo"
+        bundled.maintenance = Maintenance(state: .endOfLife, reason: "Chromium 89 is years past support.", source: "release calendar")
+        let inside = Scanner.fixSteps(bundled, [v], packages: [bundled])
+        XCTAssertTrue(inside.contains { $0.contains("bundled inside Demo") })
+        XCTAssertFalse(inside.contains { $0.hasPrefix("brew uninstall") })
+    }
+
+    func testPointerOutOfADeprecationNote() {
+        XCTAssertEqual(MaintenanceCheck.pointer(in: "This package is deprecated, use @scope/next instead"), "@scope/next")
+        XCTAssertNil(MaintenanceCheck.pointer(in: "no longer supported"))
+    }
+}
+
+final class RiskContextTests: XCTestCase {
+    func finding(_ build: (inout Package) -> Void = { _ in }) -> Finding {
+        var p = Package(ecosystem: .homebrew, name: "demo", version: "1.0", location: "/opt/homebrew/Cellar/demo/1.0")
+        build(&p)
+        var v = Vulnerability(id: "CVE-2026-1"); v.severity = .high; v.cvss = 8.1; v.fixed = ["1.1"]
+        return Finding(package: p, vulns: [v], fixHint: "brew upgrade 'demo'")
+    }
+
+    func testListeningOutranksIdle() {
+        let idle = finding { p in p.exposure = Exposure() }
+        var listeningPkg = Exposure(); listeningPkg.running = true; listeningPkg.ports = [5432]
+        let listening = finding { p in p.exposure = listeningPkg }
+        XCTAssertGreaterThan(listening.risk.score, idle.risk.score)
+        XCTAssertTrue(listening.risk.factors.contains("listening on 5432"))
+        XCTAssertTrue(idle.risk.factors.contains("not running when scanned"))
+    }
+
+    func testUnknownExposureIsNeutral() {
+        let unknown = finding()
+        XCTAssertFalse(unknown.risk.factors.contains("not running when scanned"), "no answer is not a 'no'")
+    }
+
+    func testAgePushesUp() {
+        var old = finding()
+        old.firstSeen = Date().addingTimeInterval(-30 * 86400)
+        let fresh = finding()
+        XCTAssertEqual(old.ageDays, 30)
+        XCTAssertGreaterThan(old.risk.score, fresh.risk.score)
+        XCTAssertTrue(old.risk.factors.contains("open for 30 days"))
+    }
+
+    func testAbandonedRanksAsWorkRatherThanAsWaiting() {
+        var stuck = finding()
+        stuck.awaitingRelease = true
+        stuck.fixHint = "No fixed release yet — demo 1.0 is the newest available."
+        XCTAssertTrue(stuck.risk.blocked)
+
+        var dead = stuck
+        dead.package.maintenance = Maintenance(state: .withdrawn, reason: "Yanked after it shipped.", source: "PyPI")
+        XCTAssertFalse(dead.risk.blocked, "there is nothing to wait for, so it isn't blocked")
+        XCTAssertTrue(dead.risk.abandoned)
+        XCTAssertGreaterThan(dead.risk.score, stuck.risk.score)
+        XCTAssertTrue(dead.risk.factors.contains { $0.contains("no fix is ever coming") })
+    }
+
+    func testBundledStillRanksBelowTheSameFlawYouRun() {
+        var inside = finding { p in p.parent = "Demo"; p.ecosystem = .app }
+        inside.fixHint = "Update Demo from its menu (Check for Updates…)"
+        let own = finding()
+        XCTAssertLessThan(inside.risk.score, own.risk.score)
+    }
+}
+
 final class HistoryTests: XCTestCase {
     func testFirstSeenIsTheOldestSightingAcrossTheAdvisories() {
         var p = Package(ecosystem: .npm, name: "left-pad", version: "1.0.0")
@@ -223,5 +346,24 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(History.key(one, v), History.key(two, v), "a patch release that doesn't fix it is the same open problem")
         one.parent = "pipx"
         XCTAssertNotEqual(History.key(one, v), History.key(two, v))
+    }
+}
+
+final class ContextExportTests: XCTestCase {
+    func testCSVCarriesTheNewColumns() {
+        var p = Package(ecosystem: .homebrew, name: "demo", version: "1.0")
+        var e = Exposure(); e.running = true; e.ports = [8080]
+        p.exposure = e
+        p.maintenance = Maintenance(state: .endOfLife, reason: "past support", source: "release calendar")
+        var v = Vulnerability(id: "CVE-2026-1"); v.severity = .high
+        var f = Finding(package: p, vulns: [v], fixHint: "brew uninstall 'demo'")
+        f.firstSeen = Date().addingTimeInterval(-9 * 86400)
+        let csv = ReportExport.csv(ScanReport(generated: Date(), posture: SystemPosture(), packages: [p], findings: [f], sources: []))
+        let header = csv.split(whereSeparator: \.isNewline)[0]
+        for column in ["running", "listening", "autostart", "first_seen", "age_days", "maintenance", "maintenance_reason"] {
+            XCTAssertTrue(header.contains(column), "missing \(column)")
+        }
+        XCTAssertTrue(csv.contains("endOfLife"))
+        XCTAssertTrue(csv.contains(",9,"))
     }
 }

@@ -69,6 +69,7 @@ public enum BrewCollector {
             let candidates = [((urls?["stable"] as? [String: Any])?["url"] as? String), ((urls?["head"] as? [String: Any])?["url"] as? String), f["homepage"] as? String]
             p.repo = candidates.compactMap { $0 }.compactMap(repoURL).first
             p.outdated = f["outdated"] as? Bool ?? false
+            p.maintenance = maintenance(f)
             p.modified = FS.mtime(p.location)
             pkgs.append(p)
         }
@@ -76,12 +77,51 @@ public enum BrewCollector {
             guard let token = c["token"] as? String, let ver = c["installed"] as? String else { continue }
             var p = Package(ecosystem: .cask, name: token, version: ver, location: prefix.isEmpty ? "" : "\(prefix)/Caskroom/\(token)", source: "brew info")
             p.outdated = c["outdated"] as? Bool ?? false
+            p.maintenance = maintenance(c)
             // Remember which .app bundles this cask put in /Applications so app findings can say `brew upgrade --cask`.
             p.parent = nil
             p.bundleID = appNames(c).joined(separator: "|")
             pkgs.append(p)
         }
         return pkgs
+    }
+
+    /// Homebrew says so itself: a disabled formula can't be installed any more, and a deprecated
+    /// one is on its way out. Either way no newer version is coming through brew, which is the
+    /// part that matters once an advisory names it.
+    static func maintenance(_ j: [String: Any]) -> Maintenance? {
+        let disabled = j["disabled"] as? Bool ?? false
+        let deprecated = j["deprecated"] as? Bool ?? false
+        guard disabled || deprecated else { return nil }
+        let prefix = disabled ? "disable" : "deprecation"
+        let raw = (j["\(prefix)_reason"] as? String)?.trimmed ?? ""
+        let date = (j["\(prefix)_date"] as? String).flatMap { MaintenanceCheck.day.date(from: String($0.prefix(10))) }
+        let replacement = (j["\(prefix)_replacement"] as? String)?.trimmed
+        let what = disabled ? "Homebrew has disabled this formula" : "Homebrew has deprecated this formula"
+        let why = reason(raw)
+        return Maintenance(state: disabled ? .disabled : .deprecated,
+                           reason: why.isEmpty ? "\(what)." : "\(what): \(why).",
+                           source: "brew info", since: date,
+                           replacement: (replacement?.isEmpty ?? true) ? nil : replacement)
+    }
+
+    /// Homebrew's reasons are tokens. These are the ones that say something a person would want
+    /// to read; anything else is passed through as it came.
+    static func reason(_ raw: String) -> String {
+        switch raw {
+        case "": return ""
+        case "unmaintained": return "nobody is maintaining it upstream"
+        case "deprecated_upstream": return "its own authors deprecated it"
+        case "repo_archived": return "the upstream repository is archived"
+        case "repo_removed": return "the upstream repository is gone"
+        case "does_not_build": return "it no longer builds"
+        case "no_license": return "it has no license"
+        case "versioned_formula": return "Homebrew only keeps current versions"
+        case "unsupported": return "it is unsupported"
+        case "discontinued": return "it is discontinued"
+        case "moved_to_mas": return "it moved to the Mac App Store"
+        default: return raw.replacingOccurrences(of: "_", with: " ")
+        }
     }
 
     static func appNames(_ cask: [String: Any]) -> [String] {

@@ -213,6 +213,20 @@ struct ModernOverview: View {
                     ModernHeading(title: "Worth Updating", count: urgent.count, tint: .orange)
                     ForEach(Array(urgent.prefix(5))) { f in ModernFindingRow(finding: f) }
                 }
+                // Things no release will ever fix. The ones with advisories are already above;
+                // this is the standing list, including what nothing has been published against
+                // yet — the point being that waiting won't help any of them.
+                let dead = r.unmaintained
+                if !dead.isEmpty {
+                    ModernHeading(title: "Not Maintained", count: dead.count, tint: .brown)
+                    Text("No newer version is coming for these. The fix is to remove or replace them.")
+                        .font(.system(size: 12.5)).foregroundStyle(.secondary).padding(.leading, 36).padding(.bottom, 2)
+                    ForEach(Array(dead.prefix(8))) { p in UnmaintainedRow(package: p, findings: r.findings) }
+                    if dead.count > 8 {
+                        Button("All \(dead.count) in Inventory") { model.page = .inventory }
+                            .buttonStyle(.borderless).font(.system(size: 12, weight: .medium)).padding(.leading, 36).padding(.top, 2)
+                    }
+                }
                 let headlines = (r.news ?? []).filter { $0.relevance != .general && ($0.published ?? .distantPast) > Date().addingTimeInterval(-7 * 86400) }
                 if !headlines.isEmpty {
                     ModernHeading(title: "In the News", count: headlines.count, tint: .pink)
@@ -405,6 +419,7 @@ struct ModernFindingRow: View {
                     } else if p.exposure?.autostart == true {
                         RowIcon(symbol: "power", tint: .orange, help: "Started by launchd")
                     }
+                    if f.risk.abandoned { RowIcon(symbol: "trash.slash", tint: .brown, help: p.maintenance?.reason ?? "No fix is coming") }
                     if f.awaitingRelease == true { RowIcon(symbol: "clock", tint: .secondary, help: "No fixed release yet") }
                     else if p.outdated { RowIcon(symbol: "arrow.down.circle", tint: .blue, help: p.latest.map { "Update available: \($0)" } ?? "Update available") }
                 }
@@ -432,6 +447,14 @@ struct ModernFindingRow: View {
                     }
                     Text([p.ecosystem.title, p.source, p.location].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+                    if let m = p.maintenance {
+                        Label {
+                            Text("\(m.state.title) — \(m.reason) (\(m.source))").font(.system(size: 12))
+                        } icon: {
+                            Image(systemName: "trash.slash").font(.system(size: 11))
+                        }
+                        .foregroundStyle(m.terminal ? Color.brown : .secondary)
+                    }
                     if let e = p.exposure {
                         Text("On this Mac: " + e.summary + (e.notes.isEmpty ? "" : " — " + e.notes.joined(separator: "; ")))
                             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3).truncationMode(.middle)
@@ -543,6 +566,35 @@ struct ModernSearchResults: View {
     }
 }
 
+/// One unmaintained package: what it is, who said so, and whether anything is published against
+/// it yet. A clean one still belongs on the list — it just hasn't been found out yet.
+struct UnmaintainedRow: View {
+    var package: Package
+    var findings: [Finding]
+
+    var body: some View {
+        let p = package
+        let open = findings.filter { $0.package.name == p.name && $0.package.ecosystem == p.ecosystem }
+        let vulns = open.reduce(0) { $0 + $1.vulns.count }
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "trash.slash").foregroundStyle(.brown).frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(p.displayName).font(.system(size: 13.5)).lineLimit(1)
+                    Text(p.version).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                }
+                Text(p.maintenance?.reason ?? "").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if vulns > 0 { ThingsTag(text: plural(vulns, "advisory", "advisories"), tint: .red) }
+            else { ThingsTag(text: "nothing published yet") }
+            ThingsTag(text: p.maintenance?.state.title.lowercased() ?? "", tint: .brown)
+        }
+        .padding(.vertical, 5).padding(.horizontal, 10)
+        .help(p.location)
+    }
+}
+
 struct InstalledRow: View {
     var package: Package
     var body: some View {
@@ -554,6 +606,7 @@ struct InstalledRow: View {
             Spacer(minLength: 8)
             if let e = p.exposure, e.listening { ThingsTag(text: "listening " + e.ports.map(String.init).joined(separator: ","), tint: .orange) }
             else if p.exposure?.running == true { ThingsTag(text: "running", tint: .orange) }
+            if let m = p.maintenance { ThingsTag(text: m.state.title.lowercased(), tint: m.terminal ? .brown : .secondary) }
             if p.outdated { ThingsTag(text: p.latest.map { "update → \($0)" } ?? "update ready", tint: .blue) }
             ThingsTag(text: p.ecosystem.title)
         }
