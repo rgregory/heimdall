@@ -57,6 +57,7 @@ for f in report.findings.prefix(15) {
     let note = here.isEmpty ? "" : " · " + here.joined(separator: ", ")
     print("  [\(worst)] \(f.package.ecosystem.rawValue) \(f.package.displayName) \(f.package.version) — \(f.vulns.count) advisories\(note) → \(f.fixHint)")
 }
+print("\nCoverage: \(report.coverageGaps.count) packages without a completed primary check; \(report.coverageWarnings.count) source warnings")
 print("\nSources")
 for s in report.sources { print("  \(s.state.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)) \(s.name): \(s.detail)") }
 exit(report.kevCount > 0 ? 2 : 0)

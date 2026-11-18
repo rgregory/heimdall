@@ -60,3 +60,11 @@ Add entries to `~/Library/Application Support/Heimdall/app-cpe.json` (Settings â
 ```json
 [{ "bundleID": "com.example.App", "cpe": ["example:app"], "kevVendor": "^example$", "kevProduct": "app" }]
 ```
+
+## Coverage, remediation and exceptions
+
+Coverage is stored with each package and included in JSON reports and advisory CSV rows. It records the primary matching path (NVD, OSV, Homebrew advisories, or the malicious-extension list), rather than inferring success from an empty finding list. Offline checks are explicitly marked cached. Online caches within the matcher's normal lifetime can count as completed checks; failed NVD refreshes that fall back to stale data cannot. A Homebrew advisory response must identify a formula to establish its coverage. OSV's GIT-tag fallback is best effort and cannot confirm remediation because an empty result does not establish that the upstream tag exists. Vendor-only matches can still produce findings while primary coverage remains incomplete.
+
+Reports now retain their scan options. Fix verification is conservative: the scope must match the prior report, the installed version must increase, its primary check must complete, and no source warnings or failures may be present. A same-version disappearance is unconfirmed. Removal requires an unchanged online scan scope and a successful corresponding inventory collector. A removal means the installation disappeared from that inventory; it does not prove that every copy on disk was removed. Older reports remain readable but need a new baseline scan before verification can establish these outcomes. Any source warning currently prevents confirming a fix, including warnings from optional sources.
+
+Exceptions live in local preferences, with installation identity, optional advisory identity, accepted version, reason, expiry, and whether exploitation was already known. Homebrew keg paths and Chromium extension version directories are normalized so installation identity survives upgrades. Separate installation paths remain separate scopes. The app's report comparison uses unfiltered findings, so an exception does not become evidence of remediation. The CLI continues reporting all findings and does not apply app exceptions.

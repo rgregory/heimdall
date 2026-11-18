@@ -147,8 +147,22 @@ struct DisplaySettings: View {
                 Text("With the Dock icon hidden Heimdall keeps running in the menu bar and the window opens from there, so the menu bar item has to stay. Takes effect straight away.").foregroundStyle(.secondary)
             }
             Section {
-                Text("\(model.muted.count) ignored item(s)")
-                Button("Stop ignoring everything") { model.muted = []; model.persistMuted() }.disabled(model.muted.isEmpty)
+                Text("\(model.exceptions.count) saved exception(s)")
+                Text("Expired exceptions and exceptions reopened by exploitation no longer hide findings.").font(.caption)
+                ScrollView {
+                    ForEach(model.exceptions) { exception in
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading) {
+                                Text(exception.packageName + " · " + exception.scope.rawValue)
+                                Text(exception.reason).font(.caption)
+                                Text((exception.expires <= Date() ? "Expired " : "Expires ") + exception.expires.formatted(date: .abbreviated, time: .omitted)).font(.caption)
+                            }
+                            Spacer()
+                            Button("Remove") { model.exceptions.removeAll { $0.id == exception.id }; model.persistExceptions() }
+                        }
+                    }
+                }.frame(maxHeight: 130)
+                Button("Remove all exceptions") { model.exceptions = []; model.persistExceptions() }.disabled(model.exceptions.isEmpty)
             }
         }
         .formStyle(.grouped)

@@ -192,6 +192,19 @@ struct ModernOverview: View {
             let blocked = exploited.filter { $0.risk.blocked }
             ModernPageFrame(page: .front) {
                 verdict(r, urgent: urgent.count)
+                if !r.coverageGaps.isEmpty || !r.coverageWarnings.isEmpty {
+                    HStack {
+                        Label("\(r.coverageGaps.count) packages lack a completed primary check; \(r.coverageWarnings.count) source warnings.", systemImage: "exclamationmark.triangle")
+                        Button("Coverage") { model.page = .inventory }
+                        Button("Sources") { model.page = .sources }
+                    }.font(.system(size: 12)).foregroundStyle(.orange)
+                }
+                if let message = model.verificationMessage {
+                    HStack {
+                        Text(message)
+                        if !model.scanning { Button("Dismiss") { model.verificationMessage = nil } }
+                    }.font(.system(size: 12))
+                }
                 // The packages behind "minor or unrated" / "no fixed release yet", right under the sentence.
                 if r.kevFindings.isEmpty && urgent.isEmpty && !r.findings.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
@@ -241,7 +254,8 @@ struct ModernOverview: View {
                 if let c = model.changes, model.previous != nil, !c.isEmpty {
                     ModernHeading(title: "Since the Last Scan", tint: .teal)
                     ForEach(Array(c.appeared.prefix(5).enumerated()), id: \.offset) { _, x in ChangeRow(finding: x.0, vuln: x.1, resolved: false) }
-                    ForEach(Array(c.resolved.prefix(5).enumerated()), id: \.offset) { _, x in ChangeRow(finding: x.0, vuln: x.1, resolved: true) }
+                    ForEach(Array(c.resolved.prefix(5).enumerated()), id: \.offset) { _, x in ChangeRow(finding: x.0, vuln: x.1, resolved: true, outcome: c.outcome(x.0, x.1)) }
+                    ForEach(Array(c.unverified.prefix(5).enumerated()), id: \.offset) { _, x in ChangeRow(finding: x.0, vuln: x.1, resolved: true, outcome: c.outcome(x.0, x.1)) }
                 }
             }
         }
@@ -262,7 +276,8 @@ struct ModernOverview: View {
     func verdict(_ r: ScanReport, urgent: Int) -> some View {
         let kev = r.kevCount, n = r.findings.count
         var icon = "checkmark.circle.fill", tint = Color.green
-        var text = "All clear. \(plural(r.packages.count, "package")) read, nothing published against them."
+        var text = "No findings in the completed checks. \(plural(r.packages.count, "package")) inventoried."
+        if !r.coverageGaps.isEmpty || !r.coverageWarnings.isEmpty { icon = "exclamationmark.triangle.fill"; tint = .orange }
         if kev > 0 {
             let stuck = r.kevFindings.filter { $0.risk.blocked }.count
             let now = r.kevFindings.count - stuck
@@ -435,6 +450,7 @@ struct ModernFindingRow: View {
             .onTapGesture { withAnimation(.snappy(duration: 0.22)) { open.toggle() } }
             .contextMenu {
                 Button("Ignore \(p.name)") { model.toggleMute(p) }
+                Button("Verify fix (rescan)") { model.verifyFix(f) }.disabled(model.scanning)
                 Button("Copy Fix Command") { model.copy(commandPart(f.fixHint)) }
                 if !p.location.isEmpty { Button("Reveal in Finder") { NSWorkspace.shared.selectFile(p.location, inFileViewerRootedAtPath: "") } }
             }
@@ -464,6 +480,8 @@ struct ModernFindingRow: View {
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     FixSteps(steps: f.fixSteps ?? [f.fixHint])
+                    Button("Verify fix (rescan)") { model.verifyFix(f) }.disabled(model.scanning)
+                    if let message = model.verificationMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
                     VStack(spacing: 0) {
                         ForEach(f.vulns.prefix(all ? f.vulns.count : 8)) { v in ModernVulnRow(finding: f, vuln: v) }
                     }
@@ -600,7 +618,8 @@ struct InstalledRow: View {
     var body: some View {
         let p = package
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle").foregroundStyle(.green).frame(width: 16)
+            Image(systemName: p.coverage?.state == .checked ? "checkmark.circle" : "questionmark.circle")
+                .foregroundStyle(p.coverage?.state == .checked ? Color.green : Color.orange).frame(width: 16)
             Text(p.displayName).font(.system(size: 13.5)).lineLimit(1)
             Text(p.version).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 8)
@@ -608,6 +627,7 @@ struct InstalledRow: View {
             else if p.exposure?.running == true { ThingsTag(text: "running", tint: .orange) }
             if let m = p.maintenance { ThingsTag(text: m.state.title.lowercased(), tint: m.terminal ? .brown : .secondary) }
             if p.outdated { ThingsTag(text: p.latest.map { "update → \($0)" } ?? "update ready", tint: .blue) }
+            ThingsTag(text: p.coverage?.state.title ?? "Coverage unknown", tint: p.coverage?.state == .checked ? .secondary : .orange)
             ThingsTag(text: p.ecosystem.title)
         }
         .padding(.vertical, 5).padding(.horizontal, 10)
@@ -621,6 +641,7 @@ struct ChangeRow: View {
     var finding: Finding
     var vuln: Vulnerability
     var resolved: Bool
+    var outcome: RemediationOutcome? = nil
     @State private var open = false
     @State private var hover = false
 
@@ -628,9 +649,10 @@ struct ChangeRow: View {
         let f = finding, v = vuln
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: resolved ? "checkmark.circle" : "plus.circle").foregroundStyle(resolved ? Color.green : Color.red)
+                Image(systemName: resolved ? (outcome == .fixed || outcome == .removed ? "checkmark.circle" : "questionmark.circle") : "plus.circle").foregroundStyle(resolved ? (outcome == .fixed || outcome == .removed ? Color.green : Color.orange) : Color.red)
                 Text(f.package.displayName).font(.system(size: 13.5, weight: open ? .semibold : .regular))
                 Text(v.headlineID).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                if let outcome { ThingsTag(text: outcome.rawValue, tint: outcome == .fixed || outcome == .removed ? .green : .orange) }
                 if v.isKEV { ThingsTag(text: "exploited", tint: .red, filled: true) }
                 if v.hasPublicExploit { ThingsTag(text: "public exploit", tint: .purple) }
                 Spacer(minLength: 8)
@@ -656,8 +678,8 @@ struct ChangeRow: View {
                         fact("Source", v.source)
                     }
                     if resolved {
-                        Label("No longer applies — updated, removed or no longer matched since the last scan.", systemImage: "checkmark.seal")
-                            .font(.system(size: 12.5)).foregroundStyle(.green)
+                        Text(outcome?.rawValue ?? "Fix unconfirmed")
+                            .font(.system(size: 12.5)).foregroundStyle(.secondary)
                     } else {
                         ModernCommand(text: f.fixHint)
                     }

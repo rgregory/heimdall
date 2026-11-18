@@ -83,6 +83,7 @@ struct VulnDetail: View {
             Divider()
             HStack {
                 Button(model.isMuted(f, v) ? "Stop Ignoring" : "Ignore for \(f.package.name)") { model.toggleMute(f, v); dismiss() }
+                Button("Verify fix") { model.verifyFix(f) }.disabled(model.scanning)
                 Spacer()
                 if let u = lookupURL { Link(v.headlineID.hasPrefix("CVE-") ? "Open on NVD" : "Open on OSV.dev", destination: u) }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)

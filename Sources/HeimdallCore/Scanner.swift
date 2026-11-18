@@ -109,6 +109,14 @@ public struct Scanner: Sendable {
             let e = ExtensionCollector.collect()
             packages += e.packages; sources += e.status
         }
+        for i in packages.indices {
+            packages[i].coverage = PackageCoverage(.noMapping, "Inventory only; no primary vulnerability matcher for this product.")
+        }
+        func cover(_ ids: Set<String>, _ state: PackageCoverage.State, _ detail: String) {
+            for i in packages.indices where ids.contains(packages[i].id) {
+                packages[i].coverage = PackageCoverage(state, detail)
+            }
+        }
         annotateCasks(&packages)
         annotateGoOwners(&packages)
         if let s = packages.first(where: { $0.bundleID == "com.apple.Safari" }) { posture.safariVersion = s.version }
@@ -135,7 +143,11 @@ public struct Scanner: Sendable {
         var osvPackages = packages.filter { $0.ecosystem.osvName != nil }
         if let brewVulns {
             let byName = BrewVulnsParser.parse(brewVulns)
-            for p in packages where p.ecosystem == .homebrew { add(p.id, byName[p.name] ?? []) }
+            for p in packages where p.ecosystem == .homebrew {
+                add(p.id, byName[p.name] ?? [])
+                cover([p.id], byName[p.name] == nil ? .unavailable : .checked,
+                      byName[p.name] == nil ? "brew vulns returned no identifiable result for this formula." : "Homebrew advisory result for this formula.")
+            }
         } else {
             osvPackages += packages.filter { $0.ecosystem == .homebrew && $0.repo != nil }
         }
@@ -145,6 +157,11 @@ public struct Scanner: Sendable {
         let (osv, osvStatus) = await OSVClient.match(osvPackages, offline: options.offline)
         for (k, v) in osv { add(k, v) }
         sources.append(osvStatus)
+        cover(Set(osvPackages.map(\.id)), options.offline ? .cached : (osvStatus.state == .ok ? .checked : .unavailable),
+              "OSV.dev: " + osvStatus.detail)
+        for i in packages.indices where packages[i].ecosystem == .homebrew && brewVulns == nil {
+            packages[i].coverage?.supportsUpgradeVerification = false
+        }
 
         // ---- macOS & Safari releases
         if !posture.osVersion.isEmpty, !apple.isEmpty {
@@ -159,6 +176,9 @@ public struct Scanner: Sendable {
         if options.extensions, packages.contains(where: { $0.ecosystem == .browserExtension }) {
             let (bad, st) = await MaliciousExtensions.load(offline: options.offline)
             sources.append(st)
+            cover(Set(packages.filter { $0.ecosystem == .browserExtension }.map(\.id)),
+                  options.offline ? .cached : (st.state == .ok ? .checked : .unavailable),
+                  "Malicious-extension list only: " + st.detail)
             for p in packages where p.ecosystem == .browserExtension {
                 guard let id = p.bundleID, bad.contains(id) else { continue }
                 var v = Vulnerability(id: "Malicious extension \(id)")
@@ -216,6 +236,7 @@ public struct Scanner: Sendable {
             var r = Self.assemble(packages: packages, vulns: vulns, posture: posture, sources: sources, kev: kev)
             History.stamp(&r)
             r.duration = Date().timeIntervalSince(started)
+            r.scanOptions = options
             r.partial = true
             partial(r)
         }
@@ -232,6 +253,7 @@ public struct Scanner: Sendable {
             for p in packages where p.ecosystem == .app && !p.version.isEmpty && !AppCollector.isApple(p) {
                 if let e = AppCatalog.entry(for: p, in: catalog) { targets.append((p, e)) }
             }
+            cover(Set(targets.map { $0.0.id }), .pending, "Waiting for NVD.")
             var unbounded = 0, failed: [String] = []
             // Five apps can carry the same Sparkle, and each copy is still evaluated on its own
             // (their install dates differ, and the KEV date heuristic reads those), but the
@@ -245,6 +267,8 @@ public struct Scanner: Sendable {
                 let r = await nvdMatch(p, entry, nvd: nvd, kev: kev, posture: posture)
                 add(p.id, r.vulns); unbounded += r.unbounded
                 if r.failed { failed.append(p.name) }
+                cover([p.id], options.offline ? .cached : (r.failed ? .unavailable : .checked),
+                      r.failed ? "NVD did not answer every product query." : "NVD affected-version queries completed.")
                 if !r.vulns.isEmpty { interim() }
             }
             let reqs = await nvd.requests
@@ -256,6 +280,8 @@ public struct Scanner: Sendable {
                 + (failed.isEmpty ? "" : "; no answer for \(failed.joined(separator: ", "))")
             sources.append(SourceStatus(name: "NVD", state: failed.isEmpty ? .ok : .warning, detail: detail, count: announced.count, updated: Date()))
         } else {
+            cover(Set(packages.filter { $0.ecosystem == .app || $0.ecosystem == .macos }.map(\.id)),
+                  .disabled, "NVD disabled; vendor advisories may provide partial coverage.")
             sources.append(SourceStatus(name: "NVD", state: .skipped, detail: "turned off in Settings — apps, macOS and Safari are not checked"))
         }
 
@@ -336,6 +362,7 @@ public struct Scanner: Sendable {
             report.news = items
             report.sources.append(st)
         }
+        report.scanOptions = options
         progress("Done", 1)
         History.record(&report)
         report.duration = Date().timeIntervalSince(started)
@@ -367,12 +394,13 @@ public struct Scanner: Sendable {
     func nvdMatch(_ p: Package, _ entry: AppCPE, nvd: NVDClient, kev: KEVCatalog, posture: SystemPosture) async -> (vulns: [Vulnerability], unbounded: Int, failed: Bool) {
         var out: [String: Vulnerability] = [:]
         var analyzedKEV = Set<String>()     // KEV CVEs NVD has an applicability statement for under this CPE
-        var unbounded = 0, answered = false
+        let errorsBefore = await nvd.errors.count
+        var unbounded = 0, answered = 0
         for cpe in entry.cpe {
             let f = cpe.split(separator: ":").map(String.init)
             let (part, vendor, product) = f.count == 3 ? (f[0], f[1], f[2]) : ("a", f[0], f.count > 1 ? f[1] : "")
             if let list = await nvd.cves(part: part, vendor: vendor, product: product, version: p.version) {
-                answered = true
+                answered += 1
                 for c in list {
                     switch NVDClient.evaluate(c, part: part, vendor: vendor, product: product, version: p.version) {
                     case .affected: out[c.id] = out[c.id] ?? NVDClient.vulnerability(c)
@@ -417,7 +445,8 @@ public struct Scanner: Sendable {
                 }
             }
         }
-        return (Array(out.values), unbounded, !answered && !options.offline)
+        let refreshFailed = await nvd.errors.count > errorsBefore
+        return (Array(out.values), unbounded, refreshFailed || answered != entry.cpe.count || entry.cpe.isEmpty)
     }
 
     // MARK: helpers

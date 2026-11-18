@@ -153,6 +153,8 @@ public struct Package: Codable, Hashable, Identifiable, Sendable {
     public var exposure: Exposure? = nil
     /// Set when nothing is ever going to fix this one.
     public var maintenance: Maintenance? = nil
+    /// Explicit matcher outcome. nil in reports saved before coverage tracking.
+    public var coverage: PackageCoverage? = nil
 
     public var id: String { "\(ecosystem.rawValue):\(parent.map { $0 + ">" } ?? "")\(name)@\(version)@\(location)" }
 
@@ -401,6 +403,8 @@ public struct ScanReport: Codable, Sendable {
     public var timeline: [TimelineEntry]? = nil
     /// Security news from the last 30 days, matched to this Mac.
     public var news: [NewsItem]? = nil
+    /// Inventory scope used to distinguish removal from a disabled collector.
+    public var scanOptions: ScanOptions? = nil
 
     public init(generated: Date, posture: SystemPosture, packages: [Package], findings: [Finding], sources: [SourceStatus]) {
         self.generated = generated; self.posture = posture; self.packages = packages; self.findings = findings; self.sources = sources

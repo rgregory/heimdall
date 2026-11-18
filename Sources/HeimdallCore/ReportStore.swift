@@ -21,17 +21,27 @@ public enum ReportStore {
 public struct Changes: Sendable {
     public var appeared: [(Finding, Vulnerability)] = []
     public var resolved: [(Finding, Vulnerability)] = []
-    public var isEmpty: Bool { appeared.isEmpty && resolved.isEmpty }
+    public var unverified: [(Finding, Vulnerability)] = []
+    public var outcomes: [String: RemediationOutcome] = [:]
+    public var isEmpty: Bool { appeared.isEmpty && resolved.isEmpty && unverified.isEmpty }
+    public func outcome(_ f: Finding, _ v: Vulnerability) -> RemediationOutcome? { outcomes[Self.key(f, v)] }
 
-    static func key(_ f: Finding, _ v: Vulnerability) -> String { "\(f.package.ecosystem.rawValue)|\(f.package.parent ?? "")|\(f.package.name)|\(v.headlineID)" }
+    static func key(_ f: Finding, _ v: Vulnerability) -> String { "\(f.package.installationKey)|\(v.headlineID)" }
 
     public init(current: ScanReport, previous: ScanReport?) {
-        guard let previous else { return }
+        guard let previous, !current.partial else { return }
         let now = Dictionary(current.allVulns.map { (Self.key($0.0, $0.1), $0) }, uniquingKeysWith: { a, _ in a })
         let then = Dictionary(previous.allVulns.map { (Self.key($0.0, $0.1), $0) }, uniquingKeysWith: { a, _ in a })
         let byPriority: ((Finding, Vulnerability), (Finding, Vulnerability)) -> Bool = { a, b in a.1.priority > b.1.priority }
         appeared = now.filter { then[$0.key] == nil }.map { $0.value }.sorted(by: byPriority)
-        resolved = then.filter { now[$0.key] == nil }.map { $0.value }.sorted(by: byPriority)
+        for (key, pair) in then where now[key] == nil {
+            let outcome = RemediationOutcome.assess(pair.0.package, in: current, previous: previous)
+            outcomes[key] = outcome
+            if outcome == .fixed || outcome == .removed { resolved.append(pair) }
+            else { unverified.append(pair) }
+        }
+        resolved.sort(by: byPriority)
+        unverified.sort(by: byPriority)
     }
 }
 
@@ -48,7 +58,7 @@ public enum ReportExport {
             return s.unicodeScalars.contains(where: { CharacterSet(charactersIn: ",\"\r\n").contains($0) })
                 ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
         }
-        var lines = ["ecosystem,package,version,parent,location,vulnerability,aliases,severity,cvss,epss,kev,kev_added,ransomware,fixed,confidence,source,running,listening,autostart,first_seen,age_days,maintenance,maintenance_reason,fix,summary"]
+        var lines = ["ecosystem,package,version,parent,location,vulnerability,aliases,severity,cvss,epss,kev,kev_added,ransomware,fixed,confidence,source,running,listening,autostart,first_seen,age_days,maintenance,maintenance_reason,coverage,coverage_detail,fix,summary"]
         for (f, v) in r.allVulns.sorted(by: { (a: (Finding, Vulnerability), b: (Finding, Vulnerability)) in a.1.priority > b.1.priority }) {
             let p = f.package
             let others = ([v.id] + v.aliases).filter { $0 != v.headlineID }.joined(separator: " ")
@@ -62,6 +72,7 @@ public enum ReportExport {
                     e.map { $0.autostart ? "yes" : "no" } ?? ""]
             row += [f.firstSeen.map { ISO8601DateFormatter().string(from: $0) } ?? "", f.ageDays.map(String.init) ?? ""]
             row += [p.maintenance?.state.rawValue ?? "", p.maintenance?.reason ?? ""]
+            row += [p.coverage?.state.rawValue ?? "unknown", p.coverage?.detail ?? ""]
             row += [f.fixHint, v.summary]
             lines.append(row.map(q).joined(separator: ","))
         }

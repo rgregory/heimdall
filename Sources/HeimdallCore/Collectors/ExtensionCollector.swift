@@ -88,7 +88,7 @@ public enum MaliciousExtensions {
         }
         let text = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
         let ids = Set(text.allMatches(#"\b[a-p]{32}\b"#).map { $0[0] })
-        return (ids, SourceStatus(name: "Malicious extension list", state: ids.isEmpty ? .warning : .ok,
+        return (ids, SourceStatus(name: "Malicious extension list", state: ids.isEmpty || note.hasPrefix("download failed") ? .warning : .ok,
                                   detail: ids.isEmpty ? "unavailable (\(note))" : "\(ids.count) known-bad Chrome extension IDs (\(note))", count: ids.count, updated: Date()))
     }
 }

@@ -91,6 +91,11 @@ struct ModernInventory: View {
                 TableColumn("Kind", value: \.ecosystem.title).width(min: 80, ideal: 110)
                 TableColumn("Latest", value: \.latestLabel) { p in Text(p.latestLabel).font(.system(.body, design: .monospaced)).foregroundStyle(p.outdated ? Color.blue : Color.secondary) }
                     .width(min: 60, ideal: 100)
+                TableColumn("Coverage") { p in
+                    Text(p.coverage?.state.title ?? "Coverage unknown")
+                        .foregroundStyle(p.coverage?.state == .checked ? Color.secondary : Color.orange)
+                        .help(p.coverage?.detail ?? "Rescan to record coverage.")
+                }.width(min: 100, ideal: 150)
                 TableColumn("Found via", value: \.source).width(min: 100, ideal: 160)
                 TableColumn("Location", value: \.location) { p in Text(p.location).lineLimit(1).truncationMode(.middle).help(p.location) }
             }

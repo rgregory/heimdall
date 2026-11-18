@@ -78,9 +78,12 @@ final class AppModel {
     /// False until the stored report has been read from disk — the UI shouldn't call it "no scan yet" before then.
     var loaded = false
 
-    // Persisted by persist() — called from Settings' onChange and after mute changes.
+    // Persisted from Settings and exception actions.
     var options: ScanOptions
-    var muted: Set<String>
+    var exceptionClock = Date()
+    var exceptions: [FindingException]
+    var verificationMessage: String?
+    private var verificationTarget: Finding?
     var nvdAPIKey: String
     var vulnCheckToken: String
 
@@ -89,7 +92,7 @@ final class AppModel {
     init() {
         if let d = UserDefaults.standard.data(forKey: "scanOptions"), let o = try? JSONDecoder().decode(ScanOptions.self, from: d) { options = o }
         else { options = ScanOptions() }
-        muted = Set(UserDefaults.standard.stringArray(forKey: "muted") ?? [])
+        exceptions = UserDefaults.standard.data(forKey: "findingExceptions").flatMap { try? JSONDecoder().decode([FindingException].self, from: $0) } ?? []
         // Keys are read from the keychain lazily (loadSecrets), not at launch: an unsigned
         // `swift run` build is a "new app" to the keychain every time and would prompt on each launch.
         nvdAPIKey = ""
@@ -110,6 +113,7 @@ final class AppModel {
             let prev = ReportStore.previous()
             await MainActor.run {
                 model.report = latest
+                model.migrateLegacyExceptions(latest)
                 model.previous = prev
                 model.loaded = true
                 model.updateBadge()
@@ -126,7 +130,24 @@ final class AppModel {
     func persistOptions() {
         if let d = try? JSONEncoder().encode(options) { UserDefaults.standard.set(d, forKey: "scanOptions") }
     }
-    func persistMuted() { UserDefaults.standard.set(Array(muted), forKey: "muted"); updateBadge() }
+    func persistExceptions() {
+        exceptionClock = Date()
+        if let data = try? JSONEncoder().encode(exceptions) { UserDefaults.standard.set(data, forKey: "findingExceptions") }
+        updateBadge()
+    }
+
+    private func migrateLegacyExceptions(_ report: ScanReport?) {
+        guard let report, let keys = UserDefaults.standard.stringArray(forKey: "muted"), !keys.isEmpty else { return }
+        for f in report.findings {
+            for v in f.vulns where keys.contains(Self.muteKey(f, v)) || keys.contains(Self.muteKey(f.package)) {
+                exceptions.append(FindingException(package: f.package, vulnerability: v, scope: .advisory,
+                    reason: "Migrated from a previous ignore; review this exception.",
+                    expires: Date().addingTimeInterval(30 * 86400), exploited: v.isKEV))
+            }
+        }
+        persistExceptions()
+        UserDefaults.standard.removeObject(forKey: "muted")
+    }
     @ObservationIgnored private var secretsLoaded = false
     @ObservationIgnored private var savedNVD = ""
     @ObservationIgnored private var savedVulnCheck = ""
@@ -170,12 +191,14 @@ final class AppModel {
         scheduler = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
+                self.exceptionClock = Date()
+                self.updateBadge()
                 let hours = self.autoScanHours
                 if hours > 0 {
                     let age = self.report.map { Date().timeIntervalSince($0.generated) } ?? .infinity
                     if age > Double(hours) * 3600, !self.scanning { self.scan() }
                 }
-                try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
             }
         }
     }
@@ -184,6 +207,7 @@ final class AppModel {
 
     func scan() {
         guard !scanning else { return }
+        exceptionClock = Date()
         scanning = true; stage = "Starting"; progress = 0; lastError = nil
         let before = report?.partial == true ? previous : report
         loadSecrets()
@@ -204,6 +228,8 @@ final class AppModel {
             await MainActor.run {
                 model.previous = before
                 model.report = r
+                model.migrateLegacyExceptions(r)
+                model.finishVerification(r, before: before)
                 model.scanning = false
                 model.updateBadge()
             }
@@ -231,9 +257,69 @@ final class AppModel {
     static func muteKey(_ f: Finding, _ v: Vulnerability) -> String { "v|\(f.package.ecosystem.rawValue)|\(f.package.name)|\(v.headlineID)" }
     static func muteKey(_ p: Package) -> String { "p|\(p.ecosystem.rawValue)|\(p.name)" }
 
-    func isMuted(_ f: Finding, _ v: Vulnerability) -> Bool { muted.contains(Self.muteKey(f, v)) || muted.contains(Self.muteKey(f.package)) }
-    func toggleMute(_ f: Finding, _ v: Vulnerability) { let k = Self.muteKey(f, v); if muted.contains(k) { muted.remove(k) } else { muted.insert(k) }; persistMuted() }
-    func toggleMute(_ p: Package) { let k = Self.muteKey(p); if muted.contains(k) { muted.remove(k) } else { muted.insert(k) }; persistMuted() }
+    func isMuted(_ f: Finding, _ v: Vulnerability) -> Bool {
+        exceptions.contains { $0.applies(to: f.package, vulnerability: v, now: exceptionClock) }
+    }
+
+    func toggleMute(_ f: Finding, _ v: Vulnerability) {
+        if isMuted(f, v) {
+            exceptions.removeAll { $0.applies(to: f.package, vulnerability: v) }
+            persistExceptions()
+        } else { addException(f.package, vulnerability: v) }
+    }
+    func toggleMute(_ p: Package) { addException(p, vulnerability: nil) }
+
+    private func addException(_ package: Package, vulnerability: Vulnerability?) {
+        let alert = NSAlert()
+        alert.messageText = "Defer \(vulnerability?.headlineID ?? package.displayName)"
+        alert.informativeText = "Choose a scope and expiry, and record why. Newly known exploitation reopens an exception."
+        alert.addButton(withTitle: "Save Exception"); alert.addButton(withTitle: "Cancel")
+        let reason = NSTextField(string: "")
+        reason.placeholderString = "Reason (required)"
+        let scope = NSPopUpButton(frame: .zero)
+        scope.addItems(withTitles: ["This installed version", "This installation"] + (vulnerability == nil ? [] : ["This advisory in this installation"]))
+        if vulnerability != nil { scope.selectItem(at: 2) }
+        let expiry = NSPopUpButton(frame: .zero)
+        expiry.addItems(withTitles: ["Expires in 7 days", "Expires in 30 days", "Expires in 90 days"])
+        let stack = NSStackView(views: [reason, scope, expiry])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
+        stack.frame = NSRect(x: 0, y: 0, width: 360, height: 100)
+        reason.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        alert.accessoryView = stack
+        while alert.runModal() == .alertFirstButtonReturn {
+            let text = reason.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { alert.informativeText = "Enter a reason before saving the exception."; continue }
+            let scopes: [FindingException.Scope] = [.version, .installation, .advisory]
+            // Broad scopes reopen for exploitation rather than hiding unrelated exploited advisories.
+            let acceptedExploitation = vulnerability?.isKEV == true
+            exceptions.append(FindingException(package: package, vulnerability: vulnerability,
+                scope: scopes[scope.indexOfSelectedItem], reason: text,
+                expires: Date().addingTimeInterval(Double([7, 30, 90][expiry.indexOfSelectedItem]) * 86400),
+                exploited: acceptedExploitation))
+            persistExceptions()
+            return
+        }
+    }
+
+    func verifyFix(_ finding: Finding) {
+        guard !scanning else { return }
+        verificationTarget = finding
+        verificationMessage = "Verifying \(finding.package.displayName)…"
+        scan()
+    }
+
+    private func finishVerification(_ current: ScanReport, before: ScanReport?) {
+        guard let target = verificationTarget else { return }
+        defer { verificationTarget = nil }
+        let ids = Set(target.vulns.flatMap { [$0.id] + $0.aliases })
+        let remains = current.findings.contains { f in
+            f.package.installationKey == target.package.installationKey && f.vulns.contains { !ids.isDisjoint(with: [$0.id] + $0.aliases) }
+        }
+        let status = remains ? "Still detected" : before.map {
+            RemediationOutcome.assess(target.package, in: current, previous: $0).rawValue
+        } ?? "Verification unavailable"
+        verificationMessage = "\(target.package.displayName): \(status)."
+    }
 
     /// The report with ignored packages/vulnerabilities taken out.
     var visible: ScanReport? {
@@ -246,7 +332,7 @@ final class AppModel {
         return r
     }
 
-    var changes: Changes? { visible.map { Changes(current: $0, previous: previous) } }
+    var changes: Changes? { report.map { Changes(current: $0, previous: previous) } }
 
     /// Findings for a page, filtered by the toolbar search.
     func findings(for page: Page) -> [Finding] {
