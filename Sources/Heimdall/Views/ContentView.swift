@@ -39,11 +39,12 @@ func pageSubtitle(_ page: Page) -> String {
     case .languages: return "Python, npm, cargo, Ruby gems and Go binaries (including Go tools from Homebrew), matched exactly by OSV.dev."
     case .ledger: return "Every advisory that applies, one line each."
     case .inventory: return "Everything examined, vulnerable or not."
+    case .stats: return "How long fixes take to arrive, and how long they wait here once they have."
     case .sources: return "What Heimdall read, what it asked, and what it sent."
     }
 }
 
 let privacyText = [
     "Heimdall runs as you and reads only metadata your account can already read: Info.plist files, Homebrew's own inventory, package metadata in site-packages and node_modules, and the build info Go embeds in binaries. It never runs as root, never asks for Full Disk Access, and changes nothing.",
-    "Outbound: package names and versions go to OSV.dev; product names and versions (e.g. firefox 144.0) go to NVD; CVE ids go to FIRST EPSS; the KEV catalog and Apple's release index are plain downloads. No file contents, paths or host names leave the Mac.",
+    "Outbound: package names and versions go to OSV.dev; product names and versions (e.g. firefox 144.0) go to NVD; CVE ids go to FIRST EPSS; Homebrew formula names and the version that fixes an advisory go to ghcr.io, to learn the day that version was bottled; the KEV catalog and Apple's release index are plain downloads. No file contents, paths or host names leave the Mac.",
 ]

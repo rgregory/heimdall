@@ -112,9 +112,11 @@ public struct Scanner: Sendable {
         for i in packages.indices {
             packages[i].coverage = PackageCoverage(.noMapping, "Inventory only; no primary vulnerability matcher for this product.")
         }
-        func cover(_ ids: Set<String>, _ state: PackageCoverage.State, _ detail: String) {
+        func cover(_ ids: Set<String>, _ state: PackageCoverage.State, _ detail: String,
+                   source: String? = nil, reason: String? = nil) {
             for i in packages.indices where ids.contains(packages[i].id) {
-                packages[i].coverage = PackageCoverage(state, detail)
+                packages[i].coverage = PackageCoverage(state, detail, source: source,
+                                                       reason: state == .unavailable ? reason : nil)
             }
         }
         annotateCasks(&packages)
@@ -143,10 +145,28 @@ public struct Scanner: Sendable {
         var osvPackages = packages.filter { $0.ecosystem.osvName != nil }
         if let brewVulns {
             let byName = BrewVulnsParser.parse(brewVulns)
+            // Homebrew's built-in `brew vulns --json` lists only formulae with findings, plus
+            // the names it could not scan. Everything else it was given came back clean.
+            // Older (gem) output has no `checked` key, so absence there proves nothing.
+            let scan = BrewVulnsParser.coverage(brewVulns)
             for p in packages where p.ecosystem == .homebrew {
-                add(p.id, byName[p.name] ?? [])
-                cover([p.id], byName[p.name] == nil ? .unavailable : .checked,
-                      byName[p.name] == nil ? "brew vulns returned no identifiable result for this formula." : "Homebrew advisory result for this formula.")
+                let short = String(p.name.split(separator: "/").last ?? Substring(p.name))
+                if let v = byName[p.name] ?? byName[short] {
+                    add(p.id, v)
+                    cover([p.id], .checked, "Homebrew advisory result for this formula.", source: "brew vulns")
+                } else if let why = scan?.unscanned[p.name] ?? scan?.unscanned[short] {
+                    if p.repo != nil {
+                        osvPackages.append(p)   // let OSV try it from the source repo instead
+                    } else {
+                        cover([p.id], .unavailable, "brew vulns could not scan this formula: \(why)",
+                              source: "brew vulns", reason: why)
+                    }
+                } else if scan != nil {
+                    cover([p.id], .checked, "brew vulns: no open advisories for this version.", source: "brew vulns")
+                } else {
+                    cover([p.id], .unavailable, "brew vulns returned no identifiable result for this formula.",
+                          source: "brew vulns", reason: "no result (older output format)")
+                }
             }
         } else {
             osvPackages += packages.filter { $0.ecosystem == .homebrew && $0.repo != nil }
@@ -158,7 +178,7 @@ public struct Scanner: Sendable {
         for (k, v) in osv { add(k, v) }
         sources.append(osvStatus)
         cover(Set(osvPackages.map(\.id)), options.offline ? .cached : (osvStatus.state == .ok ? .checked : .unavailable),
-              "OSV.dev: " + osvStatus.detail)
+              "OSV.dev: " + osvStatus.detail, source: "OSV.dev", reason: "query failed")
         for i in packages.indices where packages[i].ecosystem == .homebrew && brewVulns == nil {
             packages[i].coverage?.supportsUpgradeVerification = false
         }
@@ -178,7 +198,8 @@ public struct Scanner: Sendable {
             sources.append(st)
             cover(Set(packages.filter { $0.ecosystem == .browserExtension }.map(\.id)),
                   options.offline ? .cached : (st.state == .ok ? .checked : .unavailable),
-                  "Malicious-extension list only: " + st.detail)
+                  "Malicious-extension list only: " + st.detail,
+                  source: "Malicious-extension list", reason: "list failed")
             for p in packages where p.ecosystem == .browserExtension {
                 guard let id = p.bundleID, bad.contains(id) else { continue }
                 var v = Vulnerability(id: "Malicious extension \(id)")
@@ -268,7 +289,8 @@ public struct Scanner: Sendable {
                 add(p.id, r.vulns); unbounded += r.unbounded
                 if r.failed { failed.append(p.name) }
                 cover([p.id], options.offline ? .cached : (r.failed ? .unavailable : .checked),
-                      r.failed ? "NVD did not answer every product query." : "NVD affected-version queries completed.")
+                      r.failed ? "NVD did not answer every product query." : "NVD affected-version queries completed.",
+                      source: "NVD", reason: nvdAPIKey == nil ? "rate-limited (no API key)" : "no answer")
                 if !r.vulns.isEmpty { interim() }
             }
             let reqs = await nvd.requests
@@ -365,8 +387,93 @@ public struct Scanner: Sendable {
         report.scanOptions = options
         progress("Done", 1)
         History.record(&report)
+        await recordLag(&report)
         report.duration = Date().timeIntervalSince(started)
         return report
+    }
+
+    /// Stamp the scan into the lag store, looking up when Homebrew bottled each fix. One
+    /// request per formula version, cached forever after, so a settled Mac asks for nothing.
+    func recordLag(_ report: inout ScanReport) async {
+        var bottled: [String: Date] = [:]
+        var asked = 0
+        for f in report.findings where f.package.ecosystem == .homebrew {
+            for v in f.vulns {
+                guard let fix = Lag.firstFixedVersion(v, above: f.package.version) else { continue }
+                let key = "\(f.package.name)@\(fix)"
+                guard bottled[key] == nil else { continue }
+                asked += 1
+                if let d = await Bottles.firstWithFix(formula: f.package.name, fixed: fix, offline: options.offline) {
+                    bottled[key] = d
+                }
+            }
+        }
+        Lag.record(report, bottled: bottled)
+        Lag.backfillFromHistory()
+        await recordFreshness(report)
+        // The Sources page is the app's account of what it read and what it sent; a lookup
+        // that leaves the Mac belongs on it even when nothing on screen depends on it yet.
+        if asked > 0 {
+            report.sources.append(SourceStatus(
+                name: "Homebrew bottle dates",
+                state: options.offline ? .skipped : .ok,
+                detail: options.offline
+                    ? "offline; using cached bottle dates only"
+                    : "when each fixed formula version was bottled, from ghcr.io (formula names and versions only)",
+                count: bottled.count, updated: Date()))
+        }
+    }
+
+    /// How many days of releases each outdated formula is behind. Both dates are public and
+    /// historical, so unlike the advisory clocks this is full the first time it runs. Only
+    /// outdated formulae are asked about: a current one is behind by definition zero, and the
+    /// answers are cached permanently, so a settled Mac does no work here.
+    func recordFreshness(_ report: ScanReport) async {
+        guard !options.offline else { return }
+        var rows: [Lag.Freshness] = []
+        // Outdated first, then anything carrying an advisory, then the rest. Capped per scan
+        // because each formula costs a few requests; answers cache, so the picture fills in
+        // over a couple of scans rather than stalling this one.
+        let flagged = Set(report.findings.map(\.package.name))
+        let brew = report.packages.filter { $0.ecosystem == .homebrew }
+            .sorted { a, b in
+                let ra = (a.outdated ? 0 : 1) + (flagged.contains(a.name) ? 0 : 1)
+                let rb = (b.outdated ? 0 : 1) + (flagged.contains(b.name) ? 0 : 1)
+                return ra == rb ? a.name < b.name : ra < rb
+            }
+            .prefix(40)
+        for p in brew {
+            // `p.version` has the Homebrew revision stripped ("1.11.1"), which is right for
+            // advisory matching but wrong here: registry tags keep it ("1.11.1_7"), so a
+            // current keg compared as behind and was dated by the original 1.11.1 bottle.
+            // The keg directory name is the exact installed tag.
+            let kegDir = (p.location as NSString).lastPathComponent
+            let keg = Version.stripBrewRevision(kegDir) == p.version ? kegDir : p.version
+            // `brew info` gives formulae no "latest", only an outdated flag, so ask the
+            // registry. Not written with `??`: its right side is an autoclosure, which
+            // cannot be async.
+            var newest = p.latest
+            if newest == nil { newest = await Bottles.newest(formula: p.name, offline: false) }
+            guard let latest = newest, Version.compareBrew(latest, keg) > 0 else { continue }
+            let installedAt = await Bottles.created(formula: p.name, version: keg, offline: false)
+            let latestAt = await Bottles.created(formula: p.name, version: latest, offline: false)
+            guard installedAt != nil || latestAt != nil else { continue }
+            rows.append(Lag.Freshness(formula: p.name, installed: keg, latest: latest,
+                                      installedBottled: installedAt, latestBottled: latestAt,
+                                      installedHere: p.installed ?? p.modified, checked: Date()))
+        }
+        // Every formula looked at this scan replaces its old row — including by removal, so a
+        // formula that has caught up (or was misread before) stops showing as behind.
+        Lag.recordFreshness(rows, checked: Set(brew.map(\.name)))
+        // Formulae past the 40-per-scan cap keep their old row, so drop any row that no
+        // longer describes the keg on disk (upgraded, uninstalled, or recorded without its
+        // revision by earlier builds).
+        var kegs: [String: String] = [:]
+        for p in report.packages where p.ecosystem == .homebrew {
+            let d = (p.location as NSString).lastPathComponent
+            kegs[p.name] = Version.stripBrewRevision(d) == p.version ? d : p.version
+        }
+        Lag.pruneFreshness(installed: kegs)
     }
 
     static func assemble(packages: [Package], vulns: [String: [Vulnerability]], posture: SystemPosture, sources: [SourceStatus], kev: KEVCatalog) -> ScanReport {
@@ -690,6 +797,10 @@ public struct Scanner: Sendable {
         // the module may be fixed upstream, but you only get it when the owner rebuilds. While
         // the owner is already current there is nothing to install.
         if p.ecosystem == .go, p.brewFormula != nil || p.ownerProduct != nil || p.ownerApp != nil { return !p.outdated }
+        // Homebrew is the delivery channel. An upstream fix (OpenSSL 4.1.1) is not installable
+        // until Homebrew bottles it, and `brew upgrade` on a formula that isn't outdated does
+        // nothing — so "fixable now" here means brew has something newer, not upstream does.
+        if p.ecosystem == .homebrew || p.ecosystem == .cask { return !p.outdated }
         let released = vulns.contains { v in v.fixed.contains { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 } }
         guard !released else { return false }
         switch p.ecosystem {
@@ -748,6 +859,12 @@ public struct Scanner: Sendable {
         }
         if p.ecosystem == .go, let f = p.brewFormula, awaitingRelease(p, vulns) {
             return "No fixed build yet — Homebrew's \(f) is current but was built with \(p.name == "stdlib" ? "Go \(p.version)" : "\(p.name) \(p.version)")\(to). It's fixed when Homebrew rebuilds \(f); brew upgrade picks that up."
+        }
+        if p.ecosystem == .homebrew || p.ecosystem == .cask, awaitingRelease(p, vulns),
+           let up = vulns.flatMap(\.fixed).filter({ Self.isFixVersion($0) && Version.compare($0, p.version) > 0 })
+                .min(by: { Version.less($0, $1) }) {
+            return "Fixed upstream in \(up), but Homebrew hasn't shipped it yet — \(p.name) \(p.version) is the newest brew offers. "
+                + "`brew upgrade \(p.ecosystem == .cask ? "--cask " : "")\(Shell.quote(p.name))` picks it up once it lands."
         }
         if awaitingRelease(p, vulns) {
             let commit = vulns.flatMap(\.fixed).first { $0.hasPrefix("commit") }

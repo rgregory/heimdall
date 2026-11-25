@@ -17,9 +17,32 @@ public struct PackageCoverage: Codable, Hashable, Sendable {
     public var state: State
     public var detail: String
     public var supportsUpgradeVerification: Bool
-    public init(_ state: State, _ detail: String, supportsUpgradeVerification: Bool = true) {
+    /// Which feed decided this state ("NVD", "OSV.dev", "brew vulns", …). Optional so reports
+    /// saved before it existed still decode.
+    public var source: String?
+    /// Why the lookup came back empty-handed, as a short phrase ("batch query failed",
+    /// "no answer (rate-limited or erroring)"). Groups the "unavailable" count by cause.
+    public var reason: String?
+    public init(_ state: State, _ detail: String, supportsUpgradeVerification: Bool = true,
+                source: String? = nil, reason: String? = nil) {
         self.state = state; self.detail = detail
         self.supportsUpgradeVerification = supportsUpgradeVerification
+        self.source = source; self.reason = reason
+    }
+
+    /// The "unavailable" packages broken down by feed and cause, largest first, e.g.
+    /// `["40 OSV.dev — batch query failed", "12 NVD — no answer (rate-limited or erroring)"]`.
+    /// Only NVD is actually rate-limited; the others fail for their own reasons, and saying
+    /// "failed or rate-limited" for all of them sent people looking for the wrong fix.
+    public static func unavailableBreakdown(_ packages: [Package]) -> [String] {
+        var groups: [String: Int] = [:]
+        for p in packages {
+            guard let c = p.coverage, c.state == .unavailable else { continue }
+            let key = (c.source ?? "unknown source") + ": " + (c.reason ?? "lookup failed")
+            groups[key, default: 0] += 1
+        }
+        return groups.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .map { "\($0.value) \($0.key)" }
     }
 }
 

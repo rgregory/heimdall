@@ -54,6 +54,17 @@ public enum BrewCollector {
         return out
     }
 
+    /// Homebrew writes an INSTALL_RECEIPT.json into every keg with the epoch second it was
+    /// poured. It is the only record of when this Mac got this version, and it goes away with
+    /// the keg at the next `brew cleanup`, so read it on every scan rather than on demand.
+    static func installDate(_ keg: String) -> Date? {
+        guard !keg.isEmpty,
+              let d = try? Data(contentsOf: URL(fileURLWithPath: keg + "/INSTALL_RECEIPT.json")),
+              let j = jsonObject(d) as? [String: Any] else { return nil }
+        guard let t = j["time"] as? Double ?? (j["time"] as? Int).map(Double.init) else { return nil }
+        return Date(timeIntervalSince1970: t)
+    }
+
     static func parse(_ j: [String: Any], prefix: String) -> [Package] {
         var pkgs: [Package] = []
         for f in j["formulae"] as? [[String: Any]] ?? [] {
@@ -71,6 +82,7 @@ public enum BrewCollector {
             p.outdated = f["outdated"] as? Bool ?? false
             p.maintenance = maintenance(f)
             p.modified = FS.mtime(p.location)
+            p.installed = installDate(p.location)
             pkgs.append(p)
         }
         for c in j["casks"] as? [[String: Any]] ?? [] {

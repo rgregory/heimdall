@@ -7,7 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum Page: String, CaseIterable, Identifiable, Hashable {
-    case front, exploited, news, system, apps, homebrew, languages, ledger, inventory, sources
+    case front, exploited, news, system, apps, homebrew, languages, ledger, inventory, stats, sources
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -20,6 +20,7 @@ enum Page: String, CaseIterable, Identifiable, Hashable {
         case .languages: return "Languages"
         case .ledger: return "Advisories"
         case .inventory: return "Inventory"
+        case .stats: return "Patch Speed"
         case .sources: return "Sources"
         }
     }
@@ -34,6 +35,7 @@ enum Page: String, CaseIterable, Identifiable, Hashable {
         case .languages: return "chevron.left.forwardslash.chevron.right"
         case .ledger: return "list.bullet.rectangle"
         case .inventory: return "shippingbox"
+        case .stats: return "stopwatch"
         case .sources: return "antenna.radiowaves.left.and.right"
         }
     }
@@ -58,6 +60,7 @@ enum Page: String, CaseIterable, Identifiable, Hashable {
         case .languages: return .purple
         case .ledger: return .teal
         case .inventory: return .brown
+        case .stats: return .mint
         case .sources: return .green
         }
     }
@@ -77,6 +80,15 @@ final class AppModel {
     var lastError: String?
     /// False until the stored report has been read from disk — the UI shouldn't call it "no scan yet" before then.
     var loaded = false
+    /// One row per scan, oldest first. Read from the history file, which outlives the two
+    /// reports the store keeps, so it is the only source for "is this getting better".
+    var trend: [History.Scan] = []
+    /// One row per advisory per installed version, with the dates behind Patch Speed.
+    var lag: [Lag.Record] = []
+    /// How far behind each outdated formula is, in days of releases.
+    var freshness: [Lag.Freshness] = []
+    /// Set by the Brief's coverage banner: the Inventory picks it up once and clears it.
+    var focusUnchecked = false
 
     // Persisted from Settings and exception actions.
     var options: ScanOptions
@@ -111,7 +123,13 @@ final class AppModel {
                 return r
             }()
             let prev = ReportStore.previous()
+            let trend = History.trend()
+            let lag = Lag.all()
+            let freshness = Lag.freshness()
             await MainActor.run {
+                model.trend = trend
+                model.lag = lag
+                model.freshness = freshness
                 model.report = latest
                 model.migrateLegacyExceptions(latest)
                 model.previous = prev
@@ -225,7 +243,13 @@ final class AppModel {
                 }
             })
             ReportStore.save(r)
+            let trend = History.trend()
+            let lag = Lag.all()
+            let freshness = Lag.freshness()
             await MainActor.run {
+                model.trend = trend
+                model.lag = lag
+                model.freshness = freshness
                 model.previous = before
                 model.report = r
                 model.migrateLegacyExceptions(r)

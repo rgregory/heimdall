@@ -131,6 +131,10 @@ public struct Package: Codable, Hashable, Identifiable, Sendable {
     /// For Go module deps and nested npm deps: the binary/package that carries this one.
     public var parent: String? = nil
     public var modified: Date? = nil
+    /// When this exact version landed on this Mac, from Homebrew's INSTALL_RECEIPT.json.
+    /// More precise than `modified`, and the one date no public source can reconstruct:
+    /// `brew cleanup` deletes the receipt along with the keg.
+    public var installed: Date? = nil
     /// A newer version is available (Homebrew, Sparkle feed, App Store or the cask index).
     public var outdated: Bool = false
     /// The newest version seen, and where it came from.

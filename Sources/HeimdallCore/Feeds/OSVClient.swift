@@ -191,6 +191,10 @@ public enum BrewVulnsParser {
                     if let s = e["cvss"] as? Double { v.cvss = s; v.severity = Severity(score: s) }
                     let fixed = (e["fixed_version"] ?? e["fixed"] ?? e["fixedVersion"] ?? e["fixed_versions"])
                     if let f = fixed as? String, !f.isEmpty { v.fixed = [f] } else if let f = fixed as? [String] { v.fixed = f }
+                    // Without a publish date the "Homebrew took" clock has no start.
+                    for k in ["published", "published_at", "publishedAt", "date"] {
+                        if let d = parseDate(e[k] as? String) { v.published = d; break }
+                    }
                     v.source = "brew vulns"
                     return v
                 }
@@ -200,5 +204,25 @@ public enum BrewVulnsParser {
         }
         if let j = jsonObject(data) { visit(j, 0) }
         return out
+    }
+
+    /// What Homebrew's built-in `brew vulns --json` says about coverage: formulae it could
+    /// not scan, keyed by name, with the reason. `nil` when the output is not that format
+    /// (no top-level `checked`), in which case a formula missing from `findings` is unknown.
+    public static func coverage(_ data: Data) -> (checked: Int, unscanned: [String: String])? {
+        guard let o = jsonObject(data) as? [String: Any], let checked = o["checked"] as? Int else { return nil }
+        var un: [String: String] = [:]
+        func put(_ name: String, _ why: String) {
+            un[name] = why
+            if let short = name.split(separator: "/").last.map(String.init), short != name { un[short] = un[short] ?? why }
+        }
+        for n in o["skipped_formulae"] as? [String] ?? [] { put(n, "no source version") }
+        for n in o["outdated_without_sbom"] as? [String] ?? [] { put(n, "outdated, no SBOM") }
+        if let u = o["unscanned_formulae"] as? [String: String] {
+            for (n, why) in u { put(n, why.isEmpty ? "not scanned" : why) }
+        } else if let u = o["unscanned_formulae"] as? [String] {
+            for n in u { put(n, "not scanned") }
+        }
+        return (checked, un)
     }
 }

@@ -54,6 +54,22 @@ public enum Version {
 
     public static func less(_ a: String, _ b: String) -> Bool { compare(a, b) < 0 }
 
+    /// Compare two Homebrew bottle/keg tags: upstream version first, then the `_N` revision
+    /// (missing = 0). A `-N` bottle rebuild suffix is ignored — same package, rebuilt.
+    /// `compare` alone reads "1.11.1_7" as newer than "1.11.1" only by accident of parsing and
+    /// never knows the revision is what is installed, which is how a current keg showed up as
+    /// 721 days behind.
+    public static func compareBrew(_ a: String, _ b: String) -> Int {
+        func split(_ t: String) -> (String, Int) {
+            let noRebuild = t.components(separatedBy: "-").first ?? t
+            let parts = noRebuild.components(separatedBy: "_")
+            return (parts[0], parts.count > 1 ? Int(parts[1]) ?? 0 : 0)
+        }
+        let (va, ra) = split(a), (vb, rb) = split(b)
+        let c = compare(va, vb)
+        return c != 0 ? c : (ra < rb ? -1 : ra > rb ? 1 : 0)
+    }
+
     /// Homebrew keg versions carry a revision suffix ("3.2.1_1").
     public static func stripBrewRevision(_ v: String) -> String {
         if let r = v.range(of: #"_\d+$"#, options: .regularExpression) { return String(v[..<r.lowerBound]) }
