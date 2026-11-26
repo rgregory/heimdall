@@ -165,7 +165,7 @@ public enum OSVClient {
                 }
             }
         }
-        v.fixed = v.fixed.uniqued().sorted { Version.less($0, $1) }
+        v.fixed = v.fixed.uniqued().sorted { Version.compare($0, $1, osvEcosystem: ecosystem) < 0 }
         return v
     }
 }

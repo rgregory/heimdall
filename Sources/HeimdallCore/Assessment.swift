@@ -134,7 +134,7 @@ public enum RemediationOutcome: String, Sendable {
             guard current.coverageWarnings.isEmpty else { return .unavailable }
             // GIT-tag lookups cannot establish whether an upstream tag exists.
             if installed.coverage?.supportsUpgradeVerification != true { return .unconfirmed }
-            return Version.less(package.version, installed.version) ? .fixed : .unconfirmed
+            return Version.less(package.version, installed.version, in: installed.ecosystem) ? .fixed : .unconfirmed
         }
     }
 }

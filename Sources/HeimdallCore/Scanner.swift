@@ -610,8 +610,8 @@ public struct Scanner: Sendable {
             }
             return steps
         }
-        let fixedIn = vulns.compactMap { v in v.fixed.filter { isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) }) }
-            .max(by: { Version.less($0, $1) })
+        let fixedIn = vulns.compactMap { v in v.fixed.filter { isFixVersion($0) && Version.compare($0, p.version, in: p.ecosystem) > 0 }.min(by: { Version.less($0, $1, in: p.ecosystem) }) }
+            .max(by: { Version.less($0, $1, in: p.ecosystem) })
         // A runtime inside an app has no update path of its own, so the advice is the host app's:
         // "update Sparkle from its menu" names a framework nobody can act on.
         if p.ecosystem == .app, let host = p.parent {
@@ -801,13 +801,13 @@ public struct Scanner: Sendable {
         // until Homebrew bottles it, and `brew upgrade` on a formula that isn't outdated does
         // nothing — so "fixable now" here means brew has something newer, not upstream does.
         if p.ecosystem == .homebrew || p.ecosystem == .cask { return !p.outdated }
-        let released = vulns.contains { v in v.fixed.contains { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 } }
+        let released = vulns.contains { v in v.fixed.contains { Self.isFixVersion($0) && Version.compare($0, p.version, in: p.ecosystem) > 0 } }
         guard !released else { return false }
         switch p.ecosystem {
         case .homebrew, .cask: return !p.outdated
         case .pypi, .npm, .crates, .rubygems, .go:
             // Without a "latest" for these, only say so when advisories carry fix info at all.
-            return vulns.allSatisfy { v in v.fixed.allSatisfy { $0.hasPrefix("commit") || Version.compare($0, p.version) <= 0 } }
+            return vulns.allSatisfy { v in v.fixed.allSatisfy { $0.hasPrefix("commit") || Version.compare($0, p.version, in: p.ecosystem) <= 0 } }
                 && vulns.contains { !$0.fixed.isEmpty }
         default: return false
         }
@@ -844,9 +844,9 @@ public struct Scanner: Sendable {
         if let m = p.maintenance, m.terminal { return removeHint(p, m) }
         // Per advisory, the first fixed release above what's installed; then the highest of those.
         let firsts = vulns.compactMap { v in
-            v.fixed.filter { Self.isFixVersion($0) && Version.compare($0, p.version) > 0 }.min(by: { Version.less($0, $1) })
+            v.fixed.filter { Self.isFixVersion($0) && Version.compare($0, p.version, in: p.ecosystem) > 0 }.min(by: { Version.less($0, $1, in: p.ecosystem) })
         }
-        let target = firsts.max(by: { Version.less($0, $1) })
+        let target = firsts.max(by: { Version.less($0, $1, in: p.ecosystem) })
         // Names are metadata too. Reject option-like names and non-package syntax before
         // offering a command, then quote every argument independently of validation.
         let names = p.ecosystem == .app ? [p.cask].compactMap { $0 } : [p.name, p.parent, p.cask].compactMap { $0 }
@@ -861,8 +861,8 @@ public struct Scanner: Sendable {
             return "No fixed build yet — Homebrew's \(f) is current but was built with \(p.name == "stdlib" ? "Go \(p.version)" : "\(p.name) \(p.version)")\(to). It's fixed when Homebrew rebuilds \(f); brew upgrade picks that up."
         }
         if p.ecosystem == .homebrew || p.ecosystem == .cask, awaitingRelease(p, vulns),
-           let up = vulns.flatMap(\.fixed).filter({ Self.isFixVersion($0) && Version.compare($0, p.version) > 0 })
-                .min(by: { Version.less($0, $1) }) {
+           let up = vulns.flatMap(\.fixed).filter({ Self.isFixVersion($0) && Version.compare($0, p.version, in: p.ecosystem) > 0 })
+                .min(by: { Version.less($0, $1, in: p.ecosystem) }) {
             return "Fixed upstream in \(up), but Homebrew hasn't shipped it yet — \(p.name) \(p.version) is the newest brew offers. "
                 + "`brew upgrade \(p.ecosystem == .cask ? "--cask " : "")\(Shell.quote(p.name))` picks it up once it lands."
         }

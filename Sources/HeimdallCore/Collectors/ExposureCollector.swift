@@ -49,7 +49,7 @@ public enum ExposureCollector {
     /// `ps -axo pid=,comm=` gives one executable path per process. Paths contain spaces, so the
     /// pid is read off the front and the rest is the path.
     static func runningProcesses() async -> [Proc] {
-        guard let ps = Shell.which("ps") else { return [] }
+        guard let ps = Shell.systemTool("ps") else { return [] }
         let r = await Shell.run(ps, ["-axo", "pid=,comm="], timeout: 20)
         return r.ok ? parseProcesses(r.stdout) : []
     }
@@ -68,7 +68,7 @@ public enum ExposureCollector {
     /// Listening TCP sockets, by pid. Without root `lsof` only reports this account's processes,
     /// which is the same boundary the rest of Heimdall works within.
     static func listeningPorts() async -> [Int: [Int]] {
-        guard let lsof = Shell.which("lsof") else { return [:] }
+        guard let lsof = Shell.systemTool("lsof") else { return [:] }
         let r = await Shell.run(lsof, ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"], timeout: 25)
         return parsePorts(r.stdout)
     }
@@ -113,7 +113,7 @@ public enum ExposureCollector {
     /// Labels launchd has loaded in this user's domain. A loaded job is one launchd starts without
     /// you asking, which is the part that matters even when it isn't running this second.
     static func loadedLabels() async -> Set<String> {
-        guard let launchctl = Shell.which("launchctl") else { return [] }
+        guard let launchctl = Shell.systemTool("launchctl") else { return [] }
         let r = await Shell.run(launchctl, ["list"], timeout: 20)
         return parseLabels(r.stdout)
     }

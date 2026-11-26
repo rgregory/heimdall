@@ -10,7 +10,7 @@ public struct CollectorOutput: Sendable {
 /// Homebrew formulae and casks, read with `brew info --json=v2 --installed` as the user.
 public enum BrewCollector {
     public static func collect(useBrewVulns: Bool, offline: Bool = false) async -> CollectorOutput {
-        await collect(useBrewVulns: useBrewVulns, offline: offline, brew: Shell.which("brew")) { exe, args, timeout in
+        await collect(useBrewVulns: useBrewVulns, offline: offline, brew: Shell.brew()) { exe, args, timeout in
             await Shell.run(exe, args, timeout: timeout)
         }
     }

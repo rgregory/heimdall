@@ -99,20 +99,62 @@ public enum Shell {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
-    /// The user's login-shell PATH plus the usual tool locations. GUI apps start with a bare
-    /// PATH, so brew, pip and friends would otherwise be invisible.
+    /// Defaults domain shared by the app and `heimdall-scan`, so a setting made in one applies to both.
+    public static let defaultsSuite = "com.rgregory.heimdall"
+    /// Key for the opt-in extra PATH entries (colon-separated), set in Settings → Matching.
+    public static let extraPathKey = "extraPath"
+
+    /// The app's own defaults when running as Heimdall.app (a suite can't be named after the
+    /// current bundle), the same domain by name from `heimdall-scan`.
+    public static var sharedDefaults: UserDefaults {
+        Bundle.main.bundleIdentifier == defaultsSuite ? .standard : (UserDefaults(suiteName: defaultsSuite) ?? .standard)
+    }
+
+    /// System tools Heimdall relies on for its own answers. They are only ever run from these
+    /// fixed, root-owned locations: a `ps` or `lsof` earlier on a user-writable PATH could
+    /// otherwise report that nothing vulnerable is running or listening.
+    public static let systemTools: [String: String] = [
+        "ps": "/bin/ps",
+        "lsof": "/usr/sbin/lsof",
+        "launchctl": "/bin/launchctl",
+    ]
+
+    /// Absolute path of a system tool, or nil if it isn't at its fixed location. Never searches PATH.
+    public static func systemTool(_ name: String) -> String? {
+        guard let p = systemTools[name], FileManager.default.isExecutableFile(atPath: p) else { return nil }
+        return p
+    }
+
+    /// Fixed locations first (system, then Homebrew), then per-user tool folders, then any extra
+    /// entries the user opted into. Built without running a login shell: a security tool should
+    /// not execute ~/.zprofile and friends just to learn PATH.
+    public static func buildPath(home: String, extra: String?) -> String {
+        var parts = ["/usr/bin", "/bin", "/usr/sbin", "/sbin",
+                     "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
+                     "\(home)/.homebrew/bin", "\(home)/.local/bin", "\(home)/.cargo/bin", "\(home)/go/bin"]
+        if let extra {
+            parts += extra.split(separator: ":").map { e -> String in let t = String(e).trimmed; return t.hasPrefix("~") ? home + t.dropFirst() : t }
+        }
+        return parts.filter { $0.hasPrefix("/") }.uniqued().joined(separator: ":")
+    }
+
+    /// The PATH Heimdall hands to child processes (brew needs git, ruby and friends).
+    /// `HEIMDALL_EXTRA_PATH` or the shared `extraPath` default add entries after the fixed ones.
     public static let path: String = {
-        var parts: [String] = []
-        let r = runSync("/bin/zsh", ["-lc", "printf %s \"$PATH\""], path: "/usr/bin:/bin:/usr/sbin:/sbin", timeout: 8)
-        if r.ok { parts += r.stdout.split(separator: ":").map(String.init) }
-        let h = Paths.home.path
-        parts += ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "\(h)/.local/bin", "\(h)/.cargo/bin", "\(h)/go/bin",
-                  "\(h)/.homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-        return parts.filter { !$0.isEmpty }.uniqued().joined(separator: ":")
+        let extra = ProcessInfo.processInfo.environment["HEIMDALL_EXTRA_PATH"]
+            ?? sharedDefaults.string(forKey: extraPathKey)
+        return buildPath(home: Paths.home.path, extra: extra)
     }()
 
-    public static func which(_ tool: String) -> String? {
-        for dir in path.split(separator: ":") {
+    /// Homebrew from its standard prefixes before anything on PATH.
+    public static func brew() -> String? {
+        for p in ["/opt/homebrew/bin/brew", "/usr/local/bin/brew", Paths.home.path + "/.homebrew/bin/brew"]
+        where FileManager.default.isExecutableFile(atPath: p) { return p }
+        return which("brew")
+    }
+
+    public static func which(_ tool: String, in searchPath: String = path) -> String? {
+        for dir in searchPath.split(separator: ":") {
             let p = "\(dir)/\(tool)"
             if FileManager.default.isExecutableFile(atPath: p) { return p }
         }
