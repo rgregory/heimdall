@@ -35,7 +35,7 @@ Sometimes no advisory names a released version newer than the one installed, and
 
 Three questions about this Mac, asked after the inventory is read and folded into the ranking:
 
-- **Is it reachable?** `ps -axo pid=,comm=` for what's running, `lsof -nP -iTCP -sTCP:LISTEN` for what's listening (this account only, without root), the LaunchAgent and LaunchDaemon plists a normal user can read, and `launchctl list` for what launchd has loaded. A package is matched to a process by path — an app bundle prefix, a Homebrew keg or the `bin` symlink Homebrew links it to. A library inside an interpreter can't be seen running, so it is left unanswered rather than called idle, and a browser extension follows its browser. Nothing is launched and no process is inspected.
+- **Is it reachable?** `ps -axo pid=,comm=` for what's running, `lsof -nP -iTCP -sTCP:LISTEN` for what's listening (this account only, without root), the LaunchAgent and LaunchDaemon plists a normal user can read, and `launchctl list` for what launchd has loaded. A package is matched to a process by path — an app bundle prefix, a Homebrew keg, the `opt` link `brew services` starts it through, or the `bin` symlink Homebrew links it to — and a formula loaded as `homebrew.mxcl.<name>` counts as started by launchd. `ps`, `lsof` and `launchctl` only ever run from `/bin` and `/usr/sbin`, never from PATH, so a look-alike earlier on a user-writable PATH can't vouch that nothing is running. A library inside an interpreter can't be seen running, so it is left unanswered rather than called idle, and a browser extension follows its browser. Nothing is launched and no process is inspected.
 - **How long has it been open?** First sightings are kept in `history.json`, keyed by package and advisory without the version, so an advisory that survives a patch release is the same open problem rather than a new one. A finding over a week old is pushed up, and the row says since when. The same file keeps one small row per scan — counts only — for the trend.
 - **Will anyone fix it?** `brew info` reports its own deprecated and disabled formulae and casks, with Homebrew's reason and replacement. npm, PyPI and crates.io are asked whether the installed release was yanked or the package deprecated, for packages that already have an advisory, capped at 60 a scan and cached for a week. A dated table of release calendars covers runtimes past end of life — Python, Node, Ruby, OpenSSL, PHP and PostgreSQL formulae. Because the table is dated, an entry only counts from the day it expires, and a stale copy under-reports instead of inventing something.
 
@@ -72,10 +72,13 @@ Exceptions live in local preferences, with installation identity, optional advis
 - **FIRST EPSS:** CVE ids.
 - **npm, PyPI, crates.io:** the name and version of a package that already has an advisory.
 - **CISA KEV catalog and Apple's security-release index:** plain downloads.
+- **GitHub:** one request a day to the latest-release endpoint of this repository, when update checks are on.
 
 No paths, file contents, host names or cookies are sent. Cookie and credential storage are both refused, so nothing a server sets comes back on a later request, and an API key travels only in the header of the request that needs it — `apiKey` for NVD, a bearer token for VulnCheck. Offline mode (in Settings) uses cached data only and skips `brew vulns`.
 
 External responses are size-limited while downloading: 2 MiB per Sparkle feed, 32 MiB for ordinary responses, 64 MiB for the cask and Exploit-DB indexes, and 128 MiB for Metasploit. OSV follows every pagination token; malformed or incomplete OSV and NVD responses are rejected instead of being cached as clean results. If a refresh fails, the previous cache is kept and Sources reports reduced coverage. Every request goes through one connection pool, so repeated lookups to the same host reuse an open connection and its TLS session rather than handshaking again, up to eight connections per host.
+
+Heimdall doesn't run your login shell to learn PATH: child processes get `/usr/bin`, `/bin`, Homebrew's prefixes and the usual per-user tool folders, plus anything added under Settings → Background (or `HEIMDALL_EXTRA_PATH` for `heimdall-scan`). Versions are compared by each ecosystem's own rules — PEP 440 for Python, SemVer for npm, cargo and Go — so a post release of the fixed version isn't mistaken for an older one.
 
 Copyable fix commands validate package names and fixed versions and quote their arguments. CSV exports neutralize spreadsheet formula prefixes in external text.
 

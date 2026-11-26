@@ -35,7 +35,7 @@ scripts/build-app.sh --install  # …and copies the app to ~/Applications
 
 For development, `swift run Heimdall` runs the app and `swift test` runs the core tests. To work in Xcode, open `Package.swift`.
 
-The app is signed ad hoc, so the first launch needs a right-click → **Open**.
+A local build is signed ad hoc, so the first launch needs a right-click → **Open**. Set `DEVELOPER_ID` (and optionally `NOTARY_PROFILE`) to sign and notarize instead; `scripts/build-app.sh` explains the variables, and pushing a `v*` tag runs the same thing in the Release workflow.
 
 ## Using it
 
@@ -45,9 +45,10 @@ The app is signed ad hoc, so the first launch needs a right-click → **Open**.
 - **Not Maintained** is the software nobody is going to fix, where the advice is to remove or replace rather than update. **News** is the last 30 days from 13 security feeds, with stories highlighted when they name a CVE that's open here. The **section pages** (macOS, Apps, Homebrew, Languages) give one row per vulnerable package; click through for how to fix it and which advisories apply, and Languages groups packages under the tool that bundles them. **Advisories**, **Inventory** and **Sources** list every advisory, everything that was checked, and how recent each source is.
 - Rows are ordered by risk rather than CVSS alone, and opening one says which signals applied — [Ranking](docs/OVERVIEW.md#ranking) is the list.
 - **Verify fix:** open a finding and choose **Verify fix (rescan)** after updating. **Exceptions:** right-click an advisory or use the package menu to defer a finding for 7, 30 or 90 days with a reason, and Settings → Display lists them. Both are deliberately strict about what counts as fixed — [Coverage, remediation and exceptions](docs/OVERVIEW.md#coverage-remediation-and-exceptions) says how strict.
-- **Export:** JSON (the full report) or CSV (one row per advisory).
+- **Export:** JSON (the full report), CSV (one row per advisory) or a CycloneDX 1.5 SBOM with the vulnerabilities attached, carrying KEV, ransomware and EPSS as properties.
 - **Menu bar:** an eye in the menu bar shows the exploited count and opens a panel with the status, the most urgent few findings, Scan Now and Quit. Settings → Display can hide the Dock icon, which turns Heimdall into a menu bar app: it keeps running with the window closed and opens from the panel. The Dock icon can only be hidden while the menu bar item is shown, and neither setting needs a relaunch.
 - Results appear as soon as the fast checks finish; the slower NVD lookups for apps and macOS fill in afterwards. While the app is open it rescans every 12 hours, and you can change the interval in Settings → Display.
+- **Background:** Settings → Background can install a LaunchAgent in `~/Library/LaunchAgents` that runs the same scan on that interval while the app is closed. It skips itself while the app is open and never asks for the keychain. A notification goes out only when something on a known-exploited list appears that wasn't in the last scan and isn't deferred. The same tab checks GitHub once a day for a newer Heimdall and links to it; nothing is downloaded or installed for you.
 
 ### Headless
 
@@ -56,6 +57,7 @@ build/heimdall-scan                 # summary to stdout
 build/heimdall-scan --json > r.json # full report; exit status 2 if anything known-exploited is present
 build/heimdall-scan --save          # also update the report the app shows
 NVD_API_KEY=… build/heimdall-scan --no-apps --csv
+build/heimdall-scan --cyclonedx > heimdall.cdx.json   # SBOM with vulnerabilities
 ```
 
 ## Layout
