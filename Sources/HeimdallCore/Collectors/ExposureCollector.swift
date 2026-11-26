@@ -11,7 +11,13 @@ public enum ExposureCollector {
         let ports = await listeningPorts()
         let agents = agentPrograms()
         let loaded = await loadedLabels()
+        return annotate(&packages, processes: processes, ports: ports, agents: agents, loaded: loaded)
+    }
 
+    /// The matching half of `annotate`, given what the system tools reported. Split out so the
+    /// whole path from tool output to ranking can be tested with fixtures.
+    static func annotate(_ packages: inout [Package], processes: [Proc], ports: [Int: [Int]],
+                         agents: [(program: String, label: String)], loaded: Set<String>) -> SourceStatus {
         guard !processes.isEmpty else {
             return SourceStatus(name: "Reachability", state: .warning,
                                 detail: "ps returned nothing, so nothing is ranked on whether it runs")
@@ -149,6 +155,11 @@ public enum ExposureCollector {
             e.autostart = true
             if e.notes.count < 4 { e.notes.append("started by launchd: \(a.label)") }
         }
+        // brew services loads formulae as homebrew.mxcl.<formula>.
+        if !e.autostart, p.ecosystem == .homebrew, loaded.contains("homebrew.mxcl.\(p.name)") {
+            e.autostart = true
+            e.notes.append("loaded by brew services as homebrew.mxcl.\(p.name)")
+        }
         if !e.autostart, let id = p.bundleID, !id.isEmpty, id.contains("."),
            loaded.contains(where: { $0 == id || $0.hasPrefix(id + ".") }) {
             e.autostart = true
@@ -181,6 +192,9 @@ public enum ExposureCollector {
             // Homebrew links its programs into <prefix>/bin, and that is the path a process is
             // started from, so the keg path on its own would miss most of them.
             if path.contains("/Cellar/\(p.name)/") { return true }
+            // `brew services` plists start programs through the opt link
+            // (/opt/homebrew/opt/redis/bin/redis-server), which names the formula, not the keg.
+            if path.hasPrefix("/opt/homebrew/opt/\(p.name)/") || path.hasPrefix("/usr/local/opt/\(p.name)/") { return true }
             if (path as NSString).lastPathComponent == p.name, path.contains("/bin/") { return true }
         }
         return false
