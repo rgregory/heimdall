@@ -46,6 +46,108 @@ public struct Changes: Sendable {
 }
 
 public enum ReportExport {
+    /// CycloneDX 1.5 JSON: every package as a component (with a purl where the ecosystem has one)
+    /// and every advisory as a vulnerability that names the components it affects. KEV and EPSS
+    /// travel as properties, so other tools keep the signals Heimdall ranks by.
+    public static func cycloneDX(_ r: ScanReport, serial: UUID = UUID()) -> Data {
+        let iso = ISO8601DateFormatter()
+        var refs: [String: String] = [:]
+        var components: [[String: Any]] = []
+        for (i, p) in r.packages.enumerated() {
+            let ref = "pkg-\(i)"
+            refs[p.id] = ref
+            var c: [String: Any] = ["bom-ref": ref, "type": componentType(p), "name": p.name, "version": p.version]
+            if let purl = purl(p) { c["purl"] = purl }
+            if let g = group(p) { c["group"] = g }
+            var props: [[String: String]] = [["name": "heimdall:ecosystem", "value": p.ecosystem.rawValue]]
+            if !p.location.isEmpty { props.append(["name": "heimdall:location", "value": p.location]) }
+            if let parent = p.parent { props.append(["name": "heimdall:bundledIn", "value": parent]) }
+            if let b = p.bundleID { props.append(["name": "heimdall:bundleID", "value": b]) }
+            if let e = p.exposure, e.any { props.append(["name": "heimdall:exposure", "value": e.summary]) }
+            if let m = p.maintenance { props.append(["name": "heimdall:maintenance", "value": m.state.rawValue]) }
+            c["properties"] = props
+            components.append(c)
+        }
+
+        // One entry per advisory, listing every installed component it applies to.
+        var order: [String] = []
+        var byID: [String: (Vulnerability, [String])] = [:]
+        for (f, v) in r.allVulns {
+            guard let ref = refs[f.package.id] else { continue }
+            let key = v.headlineID
+            if byID[key] == nil { order.append(key); byID[key] = (v, []) }
+            if !byID[key]!.1.contains(ref) { byID[key]!.1.append(ref) }
+        }
+        let vulns: [[String: Any]] = order.compactMap { key in
+            guard let (v, affected) = byID[key] else { return nil }
+            var e: [String: Any] = ["bom-ref": "vuln-" + key, "id": key, "source": ["name": v.source.isEmpty ? "Heimdall" : v.source]]
+            if !v.summary.isEmpty { e["description"] = v.summary }
+            var rating: [String: Any] = ["severity": v.severity == .unknown ? "unknown" : v.severity.rawValue]
+            if let s = v.cvss { rating["score"] = s; rating["method"] = (v.vector ?? "").hasPrefix("CVSS:4") ? "CVSSv4" : (v.vector ?? "").hasPrefix("CVSS:3") ? "CVSSv31" : "other" }
+            if let vec = v.vector { rating["vector"] = vec }
+            e["ratings"] = [rating]
+            if let d = v.published { e["published"] = iso.string(from: d) }
+            let others = v.aliases.filter { $0 != key }
+            if !others.isEmpty { e["references"] = others.map { ["id": $0, "source": ["name": $0.hasPrefix("CVE-") ? "NVD" : "OSV"]] } }
+            if !v.fixed.isEmpty { e["recommendation"] = "Fixed in " + v.fixed.joined(separator: ", ") }
+            e["affects"] = affected.map { ["ref": $0] }
+            var props: [[String: String]] = []
+            if let k = v.kev {
+                props.append(["name": "heimdall:kev", "value": k.listName])
+                props.append(["name": "heimdall:kevDateAdded", "value": k.dateAdded])
+                if k.ransomware { props.append(["name": "heimdall:ransomware", "value": "known"]) }
+            }
+            if let p = v.epss { props.append(["name": "heimdall:epss", "value": String(format: "%.5f", p)]) }
+            if v.hasPublicExploit { props.append(["name": "heimdall:publicExploit", "value": (v.publicExploits ?? []).joined(separator: ", ")]) }
+            if !props.isEmpty { e["properties"] = props }
+            return e
+        }
+
+        let host: [String: Any] = ["type": "device", "name": r.posture.hostName.isEmpty ? "Mac" : r.posture.hostName,
+                                   "version": r.posture.osVersion, "bom-ref": "host"]
+        let doc: [String: Any] = [
+            "bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1,
+            "serialNumber": "urn:uuid:" + serial.uuidString.lowercased(),
+            "metadata": ["timestamp": iso.string(from: r.generated), "component": host,
+                         "tools": ["components": [["type": "application", "name": "Heimdall"]]]],
+            "components": components,
+            "vulnerabilities": vulns,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: doc, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
+    }
+
+    static func componentType(_ p: Package) -> String {
+        switch p.ecosystem {
+        case .macos: return "operating-system"
+        case .app, .cask: return "application"
+        case .browserExtension: return "application"
+        default: return "library"
+        }
+    }
+
+    static func group(_ p: Package) -> String? {
+        guard p.ecosystem == .npm, p.name.hasPrefix("@"), let slash = p.name.firstIndex(of: "/") else { return nil }
+        return String(p.name[..<slash])
+    }
+
+    /// Package URL (purl-spec) for ecosystems that have a registered type.
+    static func purl(_ p: Package) -> String? {
+        func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? s }
+        let v = "@" + enc(p.version)
+        switch p.ecosystem {
+        case .pypi: return "pkg:pypi/" + enc(LanguageCollector.pep503(p.name)) + v
+        case .npm:
+            if let g = group(p) { return "pkg:npm/" + enc(g) + "/" + enc(String(p.name.dropFirst(g.count + 1))) + v }
+            return "pkg:npm/" + enc(p.name) + v
+        case .crates: return "pkg:cargo/" + enc(p.name) + v
+        case .rubygems: return "pkg:gem/" + enc(p.name) + v
+        case .go: return "pkg:golang/" + p.name.split(separator: "/").map { enc(String($0)) }.joined(separator: "/") + v
+        case .homebrew: return "pkg:generic/homebrew/" + enc(p.name) + v
+        case .cask: return "pkg:generic/homebrew-cask/" + enc(p.cask ?? p.name) + v
+        default: return nil
+        }
+    }
+
     public static func json(_ r: ScanReport) -> Data { (try? JSONCoding.pretty.encode(r)) ?? Data() }
 
     public static func csv(_ r: ScanReport) -> String {

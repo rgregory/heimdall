@@ -2,12 +2,13 @@ import Foundation
 import HeimdallCore
 
 // Headless scan: same engine as the app, for Terminal, cron or launchd.
-//   heimdall-scan [--json | --csv] [--offline] [--no-nvd] [--save] [--quiet]
+//   heimdall-scan [--json | --csv | --cyclonedx] [--offline] [--no-nvd] [--save] [--quiet]
 let args = Set(CommandLine.arguments.dropFirst())
 if args.contains("-h") || args.contains("--help") {
     print("""
-    usage: heimdall-scan [--json | --csv] [--offline] [--no-nvd] [--no-apps] [--save] [--quiet]
+    usage: heimdall-scan [--json | --csv | --cyclonedx] [--offline] [--no-nvd] [--no-apps] [--save] [--quiet]
       --json / --csv  write the report to stdout instead of a summary
+      --cyclonedx     write a CycloneDX 1.5 SBOM with vulnerabilities to stdout
       --offline       cached feeds only
       --no-nvd        skip NVD lookups (apps, macOS, Safari)
       --save          also store the report where the Heimdall app reads it
@@ -19,7 +20,7 @@ var opts = ScanOptions()
 opts.offline = args.contains("--offline")
 opts.nvd = !args.contains("--no-nvd")
 opts.apps = !args.contains("--no-apps")
-let quiet = args.contains("--quiet") || args.contains("--json") || args.contains("--csv")
+let quiet = args.contains("--quiet") || args.contains("--json") || args.contains("--csv") || args.contains("--cyclonedx")
 let err = FileHandle.standardError
 let env = ProcessInfo.processInfo.environment
 CacheMaintenance.sweep()   // the cache is shared with the app; whoever runs first prunes it
@@ -29,6 +30,7 @@ let report = await scanner.run { stage, f in
 }
 if args.contains("--save") { ReportStore.save(report) }
 if args.contains("--json") { FileHandle.standardOutput.write(ReportExport.json(report)); exit(report.kevCount > 0 ? 2 : 0) }
+if args.contains("--cyclonedx") { FileHandle.standardOutput.write(ReportExport.cycloneDX(report)); exit(report.kevCount > 0 ? 2 : 0) }
 if args.contains("--csv") { print(ReportExport.csv(report), terminator: ""); exit(report.kevCount > 0 ? 2 : 0) }
 
 print("\nTHE HEIMDALL — \(report.posture.hostName), macOS \(report.posture.osVersion)")

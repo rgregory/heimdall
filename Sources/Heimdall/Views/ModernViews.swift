@@ -57,8 +57,9 @@ struct ModernShell: View {
                 Button { model.scan() } label: { Label("Scan", systemImage: "arrow.clockwise") }
                     .disabled(model.scanning).help("Scan again (⌘R)")
                 Menu {
-                    Button("Report as JSON…") { model.export(csv: false) }
-                    Button("Advisories as CSV…") { model.export(csv: true) }
+                    Button("Report as JSON…") { model.export(.json) }
+                    Button("Advisories as CSV…") { model.export(.csv) }
+                    Button("SBOM as CycloneDX…") { model.export(.cycloneDX) }
                 } label: { Label("Export", systemImage: "square.and.arrow.up") }
                     .disabled(model.report == nil)
             }

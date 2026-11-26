@@ -393,16 +393,23 @@ final class AppModel {
 
     // MARK: export
 
-    func export(csv: Bool) {
+    enum ExportFormat { case json, csv, cycloneDX }
+
+    func export(_ format: ExportFormat) {
         guard let r = visible else { return }
         let panel = NSSavePanel()
         let day = r.generated.formatted(.iso8601.year().month().day())
-        panel.nameFieldStringValue = "heimdall-\(r.posture.hostName)-\(day).\(csv ? "csv" : "json")"
-        panel.allowedContentTypes = [csv ? .commaSeparatedText : .json]
+        let ext: String
+        switch format { case .json: ext = "json"; case .csv: ext = "csv"; case .cycloneDX: ext = "cdx.json" }
+        panel.nameFieldStringValue = "heimdall-\(r.posture.hostName)-\(day).\(ext)"
+        panel.allowedContentTypes = [format == .csv ? .commaSeparatedText : .json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            if csv { try ReportExport.csv(r).write(to: url, atomically: true, encoding: .utf8) }
-            else { try ReportExport.json(r).write(to: url, options: .atomic) }
+            switch format {
+            case .csv: try ReportExport.csv(r).write(to: url, atomically: true, encoding: .utf8)
+            case .json: try ReportExport.json(r).write(to: url, options: .atomic)
+            case .cycloneDX: try ReportExport.cycloneDX(r).write(to: url, options: .atomic)
+            }
         } catch { lastError = "Export failed: \(error.localizedDescription)" }
     }
 

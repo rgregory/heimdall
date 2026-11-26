@@ -22,10 +22,12 @@ struct HeimdallApp: App {
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(model.scanning)
                 Divider()
-                Button("Export Report as JSON…") { model.export(csv: false) }
+                Button("Export Report as JSON…") { model.export(.json) }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(model.report == nil)
-                Button("Export Findings as CSV…") { model.export(csv: true) }
+                Button("Export Findings as CSV…") { model.export(.csv) }
+                    .disabled(model.report == nil)
+                Button("Export SBOM as CycloneDX…") { model.export(.cycloneDX) }
                     .disabled(model.report == nil)
             }
             CommandGroup(after: .sidebar) {
