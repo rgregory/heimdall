@@ -10,6 +10,7 @@ struct SettingsView: View {
             MatchingSettings().tabItem { Label("Matching", systemImage: "link") }
             NewsSettings().tabItem { Label("News", systemImage: "newspaper") }
             DisplaySettings().tabItem { Label("Display", systemImage: "paintbrush") }
+            BackgroundSettings().tabItem { Label("Background", systemImage: "bell.badge") }
         }
         .frame(width: 560, height: 470)
         .onChange(of: model.options) { _, _ in model.persistOptions() }
@@ -172,6 +173,50 @@ struct DisplaySettings: View {
             Presentation.apply()
         }
         .onChange(of: hideDockIcon) { _, _ in Presentation.apply() }
+    }
+}
+
+struct BackgroundSettings: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage(Notifier.enabledKey) private var notify = true
+    @AppStorage(SettingsKey.checkForUpdates) private var checkUpdates = true
+    @AppStorage(Shell.extraPathKey) private var extraPath = ""
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Notify me about newly exploited findings", isOn: $notify)
+                    .disabled(!Notifier.available)
+                Toggle("Scan in the background while Heimdall is closed", isOn: Binding(
+                    get: { model.backgroundScans }, set: { model.setBackgroundScans($0) }))
+                    .disabled(!BackgroundAgent.available || model.autoScanHours <= 0)
+            } header: { Text("While you're away") } footer: {
+                Text(BackgroundAgent.available
+                     ? "A notification only goes out when something on a known-exploited list appears that wasn't there in the last scan and isn't deferred. Background scans use a LaunchAgent in ~/Library/LaunchAgents on the Display tab's schedule, skip themselves while the app is open, and never ask for the keychain."
+                     : "Notifications and background scans need the built Heimdall.app (scripts/build-app.sh), not `swift run`.")
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle("Check GitHub for newer Heimdall releases", isOn: $checkUpdates)
+                if let u = model.appUpdate, let url = URL(string: u.url) {
+                    Link("Heimdall \(u.version) is available", destination: url)
+                } else if checkUpdates {
+                    Text("Heimdall \(AppModel.installedVersion ?? "(development build)") is the latest.").foregroundStyle(.secondary)
+                }
+            } header: { Text("Updates") } footer: {
+                Text("At most daily, one request to api.github.com. Nothing is downloaded or installed for you.").foregroundStyle(.secondary)
+            }
+            Section {
+                TextField("Extra PATH entries, colon-separated", text: $extraPath)
+                    .font(.system(.body, design: .monospaced))
+            } header: { Text("Finding package managers") } footer: {
+                Text("Heimdall no longer runs your login shell to learn PATH. It looks in /usr/bin, Homebrew and the usual per-user tool folders; add anything else here. ps, lsof and launchctl always come from /bin and /usr/sbin. Takes effect at the next launch.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onChange(of: notify) { _, on in if on { Task { await Notifier.requestAuthorization() } } }
+        .onChange(of: checkUpdates) { _, _ in model.updateCheckSettingChanged() }
     }
 }
 

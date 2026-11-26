@@ -124,6 +124,12 @@ struct MenuBarPanel: View {
                 Divider()
                 VStack(alignment: .leading, spacing: 4) { ForEach(top) { row($0) } }
             }
+            if let u = model.appUpdate, let url = URL(string: u.url) {
+                Divider()
+                Link(destination: url) {
+                    Label("Heimdall \(u.version) is available", systemImage: "arrow.down.circle").font(.system(size: 12))
+                }
+            }
             Divider()
             footer
         }

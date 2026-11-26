@@ -101,6 +101,42 @@ final class AppModel {
 
     private var scheduler: Task<Void, Never>?
 
+    /// Whether the LaunchAgent that scans while the app is closed is installed.
+    var backgroundScans = BackgroundAgent.installed
+    /// A newer Heimdall release, when one exists and update checks are on.
+    var appUpdate: ReleaseCheck.Release?
+    @ObservationIgnored private var lastUpdateCheck: Date?
+    static let installedVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+
+    /// Settings writes this through @AppStorage; the model reads it.
+    var checkForUpdates: Bool { UserDefaults.standard.object(forKey: SettingsKey.checkForUpdates) as? Bool ?? true }
+
+    func updateCheckSettingChanged() {
+        lastUpdateCheck = nil
+        if checkForUpdates { checkForUpdate() } else { appUpdate = nil }
+    }
+
+    func setBackgroundScans(_ on: Bool) {
+        let hours = autoScanHours
+        Task { @MainActor in
+            let error: String?
+            if on { error = await BackgroundAgent.install(hours: hours) } else { error = await BackgroundAgent.uninstall() }
+            if let error { lastError = error }
+            backgroundScans = BackgroundAgent.installed
+        }
+    }
+
+    func checkForUpdate() {
+        guard checkForUpdates, let installed = Self.installedVersion else { return }
+        if let last = lastUpdateCheck, Date().timeIntervalSince(last) < 6 * 3600 { return }
+        lastUpdateCheck = Date()
+        let offline = options.offline
+        Task { @MainActor in
+            let latest = await ReleaseCheck.latest(offline: offline)
+            appUpdate = ReleaseCheck.newer(latest, than: installed)
+        }
+    }
+
     init() {
         if let d = UserDefaults.standard.data(forKey: "scanOptions"), let o = try? JSONDecoder().decode(ScanOptions.self, from: d) { options = o }
         else { options = ScanOptions() }
@@ -137,6 +173,9 @@ final class AppModel {
                 model.updateBadge()
                 model.ensureTimeline()
                 model.startScheduler()
+                model.checkForUpdate()
+                let hours = model.autoScanHours
+                Task { await BackgroundAgent.refreshIfNeeded(hours: hours) }
                 // Nothing stored at all: first run, so scan whatever the schedule says.
                 if latest == nil, !model.scanning { model.scan() }
             }
@@ -201,7 +240,10 @@ final class AppModel {
 
     var autoScanHours: Int {
         get { let v = UserDefaults.standard.integer(forKey: "autoScanHours"); return v == 0 ? 12 : v }
-        set { UserDefaults.standard.set(newValue, forKey: "autoScanHours"); startScheduler() }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "autoScanHours"); startScheduler()
+            Task { @MainActor in await BackgroundAgent.refreshIfNeeded(hours: newValue); backgroundScans = BackgroundAgent.installed }
+        }
     }
 
     func startScheduler() {
@@ -211,6 +253,7 @@ final class AppModel {
                 guard let self else { return }
                 self.exceptionClock = Date()
                 self.updateBadge()
+                self.checkForUpdate()
                 let hours = self.autoScanHours
                 if hours > 0 {
                     let age = self.report.map { Date().timeIntervalSince($0.generated) } ?? .infinity
@@ -256,6 +299,8 @@ final class AppModel {
                 model.finishVerification(r, before: before)
                 model.scanning = false
                 model.updateBadge()
+                let alerts = Alerts.newExploited(current: r, previous: before, exceptions: model.exceptions)
+                Task { await Notifier.post(alerts, mayAsk: true) }
             }
         }
     }
@@ -451,9 +496,11 @@ enum Icons {
 enum Keychain {
     static let service = "Heimdall"
 
-    static func get(account: String) -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+    /// `interactive: false` fails instead of showing an "allow access" dialog (background scans).
+    static func get(account: String, interactive: Bool = true) -> String? {
+        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                 kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        if !interactive { q[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
         var out: AnyObject?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
         return String(data: d, encoding: .utf8)

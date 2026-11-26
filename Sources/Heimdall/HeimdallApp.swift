@@ -2,7 +2,16 @@ import AppKit
 import HeimdallCore
 import SwiftUI
 
+/// One binary, two jobs: the app, or (from the LaunchAgent) a headless scan that exits.
 @main
+@MainActor
+enum Entry {
+    static func main() {
+        if CommandLine.arguments.contains("--background-scan") { BackgroundScan.run() }
+        HeimdallApp.main()
+    }
+}
+
 struct HeimdallApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var model = AppModel()
