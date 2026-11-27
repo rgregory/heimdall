@@ -109,9 +109,25 @@ public enum News {
                        ("&#8217;", "’"), ("&#8216;", "‘"), ("&#8220;", "“"), ("&#8221;", "”"), ("&#8211;", "–"), ("&#8212;", "—"), ("&#8230;", "…"), ("&amp;", "&")] {
             t = t.replacingOccurrences(of: a, with: b)
         }
+        t = numericEntities(t)
         t = t.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
         t = t.replacingOccurrences(of: "&amp;", with: "&")
+        t = numericEntities(t)   // a second pass for "&amp;#x5b;"
         return t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmed
+    }
+
+    /// "&#x5b;" and "&#91;" → "[". Anything that isn't a valid scalar is left as written.
+    static func numericEntities(_ s: String) -> String {
+        guard s.contains("&#") else { return s }
+        var out = "", rest = Substring(s)
+        while let r = rest.range(of: #"&#([xX][0-9a-fA-F]{1,6}|[0-9]{1,7});"#, options: .regularExpression) {
+            out += rest[..<r.lowerBound]
+            let body = rest[r].dropFirst(2).dropLast()
+            let value = body.first == "x" || body.first == "X" ? UInt32(body.dropFirst(), radix: 16) : UInt32(body)
+            if let v = value, let u = Unicode.Scalar(v) { out.unicodeScalars.append(u) } else { out += rest[r] }
+            rest = rest[r.upperBound...]
+        }
+        return out + rest
     }
 
     static let rfc822: [DateFormatter] = ["EEE, dd MMM yyyy HH:mm:ss Z", "EEE, dd MMM yyyy HH:mm:ss zzz", "dd MMM yyyy HH:mm:ss Z", "EEE, d MMM yyyy HH:mm Z"].map {

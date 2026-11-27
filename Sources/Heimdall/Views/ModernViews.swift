@@ -13,7 +13,7 @@ struct ModernShell: View {
             List {
                 sidebarRow(.front, nil)
                 sidebarRow(.exploited, model.visible?.kevCount)
-                sidebarRow(.news, model.visible?.news.map { list in list.filter { $0.relevance != .general && ($0.published ?? .distantPast) > Date().addingTimeInterval(-7 * 86400) }.count })
+                sidebarRow(.news, model.newsThisWeek.count)
                 Section {
                     ForEach([Page.system, .apps, .homebrew, .languages]) { p in
                         sidebarRow(p, p.desk.flatMap { model.visible?.findings(in: $0).count })

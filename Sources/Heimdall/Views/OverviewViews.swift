@@ -62,10 +62,10 @@ struct ModernOverview: View {
                             .buttonStyle(.borderless).font(.system(size: 12, weight: .medium)).padding(.leading, 36).padding(.top, 2)
                     }
                 }
-                let headlines = (r.news ?? []).filter { $0.relevance != .general && ($0.published ?? .distantPast) > Date().addingTimeInterval(-7 * 86400) }
+                let headlines = model.newsThisWeek
                 if !headlines.isEmpty {
                     ModernHeading(title: "In the News", count: headlines.count, tint: .pink)
-                    ForEach(Array(headlines.prefix(3))) { n in NewsRow(item: n) }
+                    ForEach(Array(headlines.prefix(3))) { s in NewsRow(story: s) }
                     if headlines.count > 3 {
                         Button("All \(headlines.count) stories about this Mac") { model.page = .news }
                             .buttonStyle(.borderless).font(.system(size: 12, weight: .medium)).padding(.leading, 36).padding(.top, 2)

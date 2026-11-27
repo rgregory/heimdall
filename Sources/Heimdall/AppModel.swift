@@ -427,7 +427,28 @@ final class AppModel {
     /// Dock badge with the exploited count, and the icon turns red while anything exploited
     /// (or a malicious extension) is present. Back to normal once it's fixed or ignored.
     /// Packages some recent story is about (for the "in the news" tag).
-    var newsPackageIDs: Set<String> { Set((visible?.news ?? []).flatMap(\.packageIDs)) }
+    var newsPackageIDs: Set<String> { Set((newsAnalysis?.stories ?? []).filter { $0.tier <= .installed }.flatMap(\.item.packageIDs)) }
+
+    /// Stories about this Mac from the last seven days, newest first: the sidebar count and the
+    /// Brief's "In the News". Same bar as the News page's On This Mac.
+    var newsThisWeek: [NewsStory] {
+        (newsAnalysis?.stories ?? [])
+            .filter { $0.tier <= .installed && ($0.day ?? -1) >= NewsAnalysis.windowDays - 7 }
+            .sorted { ($0.published ?? .distantPast) > ($1.published ?? .distantPast) }
+    }
+
+    @ObservationIgnored private var newsCache: (key: String, value: NewsAnalysis)?
+    /// The News page's tiers, clusters and trends, built once per report (and again after
+    /// midnight, so "today" moves). Muting changes the findings, and with them the KEV set.
+    var newsAnalysis: NewsAnalysis? {
+        guard let r = visible, let news = r.news else { return nil }
+        let day = Calendar.current.startOfDay(for: Date())
+        let key = "\(r.generated.timeIntervalSince1970)|\(news.count)|\(r.findings.count)|\(r.timeline?.count ?? 0)|\(day.timeIntervalSince1970)"
+        if let c = newsCache, c.key == key { return c.value }
+        let a = NewsAnalysis(report: r)
+        newsCache = (key, a)
+        return a
+    }
 
     func updateBadge() {
         let n = visible?.kevCount ?? 0
